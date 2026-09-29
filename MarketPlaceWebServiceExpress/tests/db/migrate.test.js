@@ -123,6 +123,7 @@ describe('startup migration runner', () => {
       'create_order_document.sql',
       'create_marketplace_core.sql',
       'create_sale_premium.sql',
+      'create_pending_order.sql',
     ]);
     expect(AUTO_MIGRATIONS).not.toContain('create_license_marketplace.sql');
     expect(AUTO_MIGRATIONS).not.toContain('add_price_formula_unique.sql');

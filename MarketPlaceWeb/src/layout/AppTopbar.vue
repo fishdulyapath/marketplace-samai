@@ -382,7 +382,7 @@ const checkAuthStatus = () => {
         <div class="layout-topbar-logo-container">
             <router-link to="/" class="layout-topbar-logo">
                 <img v-if="appLogo" :src="appLogo" :alt="appName" class="topbar-app-logo" />
-                <span>{{ appName }}</span>
+                <span v-else>{{ appName }}</span>
             </router-link>
         </div>
 
@@ -701,7 +701,7 @@ const checkAuthStatus = () => {
 }
 
 .topbar-app-logo {
-    width: 2.75rem;
+    width: clamp(8.5rem, 15vw, 11rem);
     height: 2.75rem;
     border-radius: 0;
     object-fit: contain;

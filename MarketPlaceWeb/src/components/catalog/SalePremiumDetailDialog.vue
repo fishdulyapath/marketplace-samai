@@ -40,13 +40,12 @@ const paidItems = computed(() => (Array.isArray(detail.value?.paid_items) ? deta
 const freeItems = computed(() => (Array.isArray(detail.value?.free_items) ? detail.value.free_items : []));
 const availableQty = computed(() => Math.max(0, Math.floor(Number(detail.value?.balance_qty ?? detail.value?.stock_qty ?? 0) || 0)));
 const soldOut = computed(() => String(detail.value?.sold_out ?? '') === '1' || availableQty.value <= 0);
-const preorderAllowed = computed(() => ['1', 'true'].includes(String(detail.value?.preorder_allowed ?? '').toLowerCase()) || detail.value?.preorder_allowed === true);
 const price = computed(() => Number(detail.value?.price || 0));
 const lineTotal = computed(() => price.value * quantity.value);
 const imageUrl = computed(() => detail.value?.image || ProductService.getPlaceholderImage());
 const canDecrease = computed(() => quantity.value > 1 && !adding.value);
-const canIncrease = computed(() => !adding.value && (preorderAllowed.value ? quantity.value < 999 : !soldOut.value && quantity.value < availableQty.value));
-const canAdd = computed(() => isLoggedIn.value && detail.value && (!soldOut.value || preorderAllowed.value) && price.value > 0 && quantity.value > 0 && !adding.value);
+const canIncrease = computed(() => !adding.value && quantity.value < 999);
+const canAdd = computed(() => isLoggedIn.value && detail.value && price.value > 0 && quantity.value > 0 && !adding.value);
 
 function formatMoney(value) {
     return Number(value || 0).toLocaleString(languageStore.locale === 'en' ? 'en-US' : languageStore.locale === 'lo' ? 'lo-LA' : 'th-TH', {
@@ -85,7 +84,7 @@ function increaseQuantity() {
 
 function normalizeQuantity() {
     const parsed = Math.floor(Number(quantity.value) || 1);
-    quantity.value = Math.max(1, preorderAllowed.value ? Math.min(parsed, 999) : soldOut.value ? 1 : Math.min(parsed, availableQty.value || 1));
+    quantity.value = Math.max(1, Math.min(parsed, 999));
 }
 
 function goToLogin() {
@@ -217,7 +216,7 @@ watch(
             <div class="spd-body">
                 <section class="spd-image-panel">
                     <div class="spd-image-wrap">
-                        <span v-if="soldOut && !preorderAllowed" class="spd-soldout">สินค้าหมด</span>
+                        <span v-if="soldOut" class="spd-soldout">รอพนักงานจัดคลัง</span>
                         <img :src="imageUrl" :alt="displayName" @error="$event.target.src = ProductService.getPlaceholderImage()" />
                     </div>
                     <p v-if="detail.remark" class="spd-remark">{{ detail.remark }}</p>
@@ -233,7 +232,7 @@ watch(
                         <div class="spd-summary-card">
                             <span>พร้อมสั่ง</span>
                             <strong :class="{ 'is-empty': soldOut }">{{ formatQty(availableQty) }} ชุด</strong>
-                            <small v-if="soldOut && preorderAllowed" class="spd-preorder-note">เปิดรับ Preorder ทั้งชุด</small>
+                            <small class="spd-preorder-note">พนักงานเลือกคลังและที่เก็บหลังรับคำขอ</small>
                         </div>
                     </div>
 
@@ -290,7 +289,7 @@ watch(
                 <Button label="ปิด" severity="secondary" outlined class="spd-secondary-action" @click="closeDialog" />
                 <Button
                     v-if="isLoggedIn"
-                    :label="soldOut && preorderAllowed ? 'เพิ่มลงตะกร้า (Preorder)' : soldOut ? 'สินค้าหมด' : 'เพิ่มลงตะกร้า'"
+                    label="เพิ่มลงตะกร้า"
                     icon="pi pi-shopping-cart"
                     class="spd-primary-action"
                     :loading="adding"

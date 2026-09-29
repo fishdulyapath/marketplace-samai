@@ -13,6 +13,7 @@ const AUTO_MIGRATIONS = Object.freeze([
   'create_order_document.sql',
   'create_marketplace_core.sql',
   'create_sale_premium.sql',
+  'create_pending_order.sql',
 ]);
 
 function isAutoMigrateEnabled(env = process.env) {

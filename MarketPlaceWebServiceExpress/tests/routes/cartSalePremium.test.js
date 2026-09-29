@@ -107,7 +107,7 @@ describe('POST /additemtocart — sale premium', () => {
     expect(mockClientQuery).not.toHaveBeenCalled();
   });
 
-  it('ปฏิเสธการเพิ่มเมื่อสินค้าในโปรโมชั่นมีไม่ครบชุด', async () => {
+  it('เพิ่มโปรโมชันที่สต็อกไม่ครบได้เพื่อให้พนักงานจัดคลังภายหลัง', async () => {
     mockLoadSalePremiumDetail.mockResolvedValue({
       premium_code: 'PRO001',
       premium_name: 'โปรหมี่กรอบ',
@@ -122,15 +122,9 @@ describe('POST /additemtocart — sale premium', () => {
       .post('/additemtocart')
       .send([{ ...requestItem, qty: '2' }]);
 
-    expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({
-      msg: 'SALE_PREMIUM_STOCK_INVALID',
-      sale_premium_code: 'PRO001',
-      qty: 2,
-      balance_qty: 0,
-      shortage_qty: 2,
-    });
-    expect(mockClientQuery).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(mockClientQuery).toHaveBeenCalled();
   });
 
   it('อนุญาตให้เพิ่มทั้งชุดเป็น Preorder เมื่อทุกชิ้นส่วนเปิดให้สั่งจอง', async () => {

@@ -23,7 +23,9 @@ Base path: `/service/v1`
 POST /service/v1/sendorder
 ```
 
-Insert header ลง `ic_trans` (trans_flag=30, doc_format_code='QT') และ detail ลง `ic_trans_detail`  
+Samai: บันทึกคำขอ `trans_flag=300`, format `MPR` ก่อน พนักงานเลือกคลัง/ที่เก็บและยืนยันเพื่อสร้าง QT `30` ภายหลัง ดู contract ปัจจุบันที่ [pending-orders.md](pending-orders.md)
+
+Insert header ลง `ic_trans` (trans_flag=300, doc_format_code='MPR') และ detail ลง `ic_trans_detail`
 รองรับสินค้าปกติ (item_type ≠ 3) และสินค้าชุด (item_type = 3 พร้อม sub_item)  
 ทั้งหมดอยู่ใน **single transaction**
 
@@ -118,7 +120,8 @@ Content-Type: application/json
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `doc_no` | string | Yes | `""` | เลขที่เอกสาร (ควรมี 'MQT' เพื่อให้ getOrderHistory เจอ) |
+| `doc_no` | string | Client mode | `""` | เลข QT ที่จะจองไว้; server สร้างเลข MPR แยกต่างหาก |
+| `request_id` | string | Recommended | — | ไม่เกิน 64 ตัวอักษร; ใช้ค่าเดิมเมื่อ retry |
 | `doc_date` | string | Yes | `""` | วันที่เอกสาร (YYYY-MM-DD) |
 | `send_date` | string | No | = doc_date | วันที่จัดส่ง |
 | `send_day` | string | No | `"0"` | จำนวนวันจัดส่ง |
@@ -130,7 +133,7 @@ Content-Type: application/json
 | `total_amount` | string | No | `"0"` | ยอดสุดท้าย |
 | `doc_time` | string | No | `""` | เวลาเอกสาร (HH:MM:SS) |
 | `remark` | string | No | `""` | หมายเหตุ |
-| `emp_code` | string | No | `""` | รหัสพนักงานขาย |
+| `emp_code` | string | No | `""` | ไม่ใช้ในคำขอ 300; QT ใช้พนักงานผู้ยืนยันจาก token เท่านั้น |
 | `credit_day` | string | No | `"0"` | จำนวนวันเครดิต |
 | `credit_date` | string | No | = doc_date | วันครบกำหนดชำระ |
 | `items` | array | Yes | — | รายการสินค้า |
@@ -145,8 +148,8 @@ Content-Type: application/json
 | `qty` | number | Yes | จำนวน |
 | `price` | number | Yes | ราคาต่อหน่วย |
 | `sum_amount` | number | Yes | ราคารวม |
-| `wh_code` | string | No | รหัสคลัง |
-| `shelf_code` | string | No | รหัส shelf |
+| `wh_code` | string | No | ล้างเป็นค่าว่างในคำขอ 300; พนักงานเลือกตอนยืนยัน |
+| `shelf_code` | string | No | ล้างเป็นค่าว่างในคำขอ 300; พนักงานเลือกตอนยืนยัน |
 | `stand_value` | number | No | ค่าตัวตั้ง |
 | `divide_value` | number | No | ค่าตัวหาร |
 | `ratio` | number | No | ratio |
@@ -170,7 +173,7 @@ Content-Type: application/json
 ### Response (200)
 
 ```json
-{ "success": true }
+{ "success": true, "doc_no": "MPR260929000001", "main_doc_no": "MPR260929000001", "trans_flag": 300, "status": "pending", "is_preorder": false, "duplicate": false }
 ```
 
 ### Response — Error (400)
@@ -181,8 +184,10 @@ error message text (plain text, ไม่ใช่ JSON)
 
 ### Notes
 
-- VAT rate ตายตัวที่ `7%` — ระบบคำนวณ `total_before_vat` และ `total_vat_value` เอง ไม่รับจาก client
-- `doc_no` ควรขึ้นต้นด้วย `MQT` เพราะ `getOrderHistory` filter ด้วย `LIKE '%MQT%'`
+- ส่ง Bearer token ของลูกค้าหรือพนักงานที่ยืนยันได้; ไม่อาศัย GUID อย่างเดียว
+- ระบบคำนวณภาษีจากรายการที่ตรวจสอบแล้วและตัวเลือก VAT
+- `doc_no` จาก checkout จองเป็นเลข QT เมื่อใช้ client numbering; ประวัติ MPR แสดงผ่าน `/pending-orders`
+- ไม่มีการบล็อกสต็อกหรือแยก preorder; การยกเลิก MPR ใช้ API ใหม่และไม่สร้าง SOC
 - สินค้าชุด (item_type=3) จะ insert header row ก่อน แล้วจึง insert sub_item โดย link กัน ผ่าน `ref_guid` (UUID สร้างตอน insert)
 - ทั้งหมดอยู่ใน `withTransaction()` — ถ้า sub_item insert ไม่สำเร็จจะ rollback ทั้งออเดอร์
 

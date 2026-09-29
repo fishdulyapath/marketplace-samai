@@ -120,6 +120,12 @@ const router = createRouter({
                     }
                 },
                 {
+                    path: 'admin/pending-orders',
+                    name: 'admin-pending-orders',
+                    component: () => import('@/views/pages/admin/AdminPendingOrders.vue'),
+                    meta: { requiresAuth: true, requiresEmployee: true, adminPermission: 'admin.orders', title: 'รอดำเนินการ' }
+                },
+                {
                     path: 'admin/orders',
                     name: 'admin-orders',
                     component: () => import('@/views/pages/admin/AdminOrders.vue'),

@@ -3,7 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const uuidv4 = () => crypto.randomUUID();
 const { pool, withTransaction, query } = require('../db');
-const { getCancelDocPattern, getErpMaxLinesPerDoc, getOrderDocPattern, getOrderDocSource, getSalePremiumEnabled, getPreorderDefaultEnabled, getStockDisplayPercent, marketplaceDocWhere, resolvePreorderAllowed } = require('../utils/marketplaceSalesSettings');
+const { getCancelDocPattern, getOrderDocSource, getSalePremiumEnabled, marketplaceDocWhere } = require('../utils/marketplaceSalesSettings');
 const { stripClientPremiumFlagsFromItems, premiumFlagValue, enforcePremiumLineValuesForItems } = require('../utils/salePremiumGuard');
 const { serverDocDate, serverDocTime } = require('../utils/serverTime');
 const { getMaxAllowanceForUnit } = require('../utils/maxAllowance');
@@ -13,11 +13,12 @@ const { aggregateOrderRowsByMainDoc } = require('../utils/orderHistoryAggregate'
 const { expandSalePremiumItemForSave, isSalePremiumItem } = require('../utils/salePremiumHelper');
 const { getProductPriceLocalx } = require('../utils/priceHelper');
 const { findPriceViolations, isFiniteNumeric } = require('../utils/orderPriceGuard');
-const { checkErpCodes, filterErpCodeList } = require('../utils/erpCodeGuard');
 const { buildSetTemplateMap, applySetTemplateToItem, setIssueMessage } = require('../utils/orderSetGuard');
 const { requireAdmin } = require('../auth/requireAdmin');
 const { likeContains } = require('../utils/likePattern');
 const { resolveDateRange } = require('../utils/adminOrderFilters');
+const { pendingIdentity } = require('../auth/pendingOrderAuth');
+const { requestMetadata } = require('../utils/pendingOrder');
 
 // แตกรายการโปรโมชันของแถม (item_type='4') เป็นบรรทัดสินค้าจริง ตรงขอบก่อนคำนวณ/บันทึก
 // สินค้าปกติผ่านตรงๆ — ของแถมได้ price/sum_amount=0 และ is_permium=1 (บังคับซ้ำด้วย guard)
@@ -159,17 +160,6 @@ async function resolveContactRemark5(client, custCode, contactCode) {
   return `${String(row.contact_name || '').trim()} โทร.${String(row.telephone || '').trim()}`.trim();
 }
 
-function isPreorderLine(item, orderIsPreorder = false) {
-  return orderIsPreorder || hasPreorderMarker(item?.remark);
-}
-
-function makeOrderStockError(stockIssues) {
-  const err = new Error('มีสินค้าเกินสต๊อกหรือไม่ได้เปิดให้ Preorder กรุณาตรวจสอบตะกร้าอีกครั้ง');
-  err.statusCode = 409;
-  err.code = 'ORDER_STOCK_PREORDER_INVALID';
-  err.stockIssues = stockIssues;
-  return err;
-}
 
 // ตรวจ Maximum Allowance = จำนวนสั่งสูงสุดต่อคำสั่งซื้อ กำหนดต่อหน่วยใน dimension_38 (REQ3)
 // ต้องตรวจฝั่ง server เพราะปุ่มเพิ่มลงตะกร้าเร็วที่การ์ดสินค้าและการแก้จำนวนในตะกร้า bypass dialog ได้
@@ -183,16 +173,24 @@ async function loadCheckoutQtySoFar(client, requestId, custCode) {
   const rs = await client.query(
     `SELECT d.item_code, d.unit_code, SUM(COALESCE(d.qty,0)) AS qty
      FROM marketplace_order_document od
-     JOIN ic_trans_detail d ON d.doc_no = od.sub_doc_no
+     JOIN ic_trans_detail d ON d.doc_no = od.sub_doc_no AND d.trans_flag=30
      WHERE od.request_id LIKE $1 || ':%' AND od.cust_code = $2
        AND COALESCE(d.is_permium,0) = 0
-     GROUP BY d.item_code, d.unit_code`,
+     GROUP BY d.item_code, d.unit_code
+     UNION ALL
+     SELECT d.item_code, d.unit_code, SUM(COALESCE(d.qty,0)) AS qty
+     FROM marketplace_pending_order p
+     JOIN ic_trans_detail d ON d.doc_no=p.doc_no AND d.trans_flag=300
+     WHERE (p.request_id=$1 OR p.request_id LIKE $1 || ':%') AND p.cust_code=$2 AND p.status='pending'
+       AND COALESCE(d.is_permium,0)=0 AND COALESCE(d.set_ref_line,'')=''
+     GROUP BY d.item_code,d.unit_code`,
     [base, custCode]
   );
 
   const map = new Map();
   for (const r of rs.rows) {
-    map.set(`${String(r.item_code || '').trim()}|${String(r.unit_code || '').trim()}`, toNumber(r.qty, 0));
+    const key = `${String(r.item_code || '').trim()}|${String(r.unit_code || '').trim()}`;
+    map.set(key, (map.get(key) || 0) + toNumber(r.qty, 0));
   }
   return map;
 }
@@ -299,160 +297,6 @@ async function validateOrderMaxAllowance(client, items, priorQtyByKey = new Map(
   }
 }
 
-async function validateOrderStockAndPreorder(client, items, options = {}) {
-  const rootItems = (Array.isArray(items) ? items : []).filter((item) => item && typeof item === 'object');
-  if (rootItems.length === 0) return;
-  const orderIsPreorder = !!options.orderIsPreorder;
-
-  // อยู่ในทรานแซกชันของผู้เรียก — ต้องอ่านผ่าน client เดิม ไม่ใช่ขอ connection ตัวที่ 2
-  const stockPercent = await getStockDisplayPercent(client);
-  const preorderDefaultEnabled = await getPreorderDefaultEnabled(client);
-  const normalCodesByWh = new Map();
-  const setCodesByWh = new Map();
-
-  const addCodeByWh = (map, whCode, itemCode) => {
-    if (!itemCode) return;
-    if (!map.has(whCode)) map.set(whCode, new Set());
-    map.get(whCode).add(itemCode);
-  };
-
-  // ⚠️ รหัสถูกส่งต่อเข้าฟังก์ชันสต็อกของ ERP ที่เอาไปต่อ SQL แล้ว EXECUTE เอง
-  //    $1 กันไม่ได้ ต้องกรองก่อน ดู src/utils/erpCodeGuard.js
-  //    รหัสที่ผ่านด่านนี้ไม่ได้ก็สั่งซื้อไม่ได้อยู่แล้ว จึงหยุดทั้งใบไปเลย
-  for (const item of rootItems) {
-    const codeError = checkErpCodes({ item_code: item.item_code, wh_code: item.wh_code });
-    if (codeError) {
-      const err = new Error(codeError);
-      err.statusCode = 400;
-      throw err;
-    }
-  }
-
-  for (const item of rootItems) {
-    const itemCode = String(item.item_code || '').trim();
-    const whCode = String(item.wh_code || '').trim();
-    if (String(item.item_type) === '3') {
-      addCodeByWh(setCodesByWh, whCode, itemCode);
-    } else {
-      addCodeByWh(normalCodesByWh, whCode, itemCode);
-    }
-  }
-
-  const normalCodes = [...new Set([...normalCodesByWh.values()].flatMap((codes) => [...codes]))];
-  const setCodes = [...new Set([...setCodesByWh.values()].flatMap((codes) => [...codes]))];
-  const allCodes = [...new Set([...normalCodes, ...setCodes])];
-
-  const preorderModeMap = new Map();
-  if (allCodes.length > 0) {
-    const modeRs = await client.query(
-      `SELECT i.code, COALESCE(d.dimension_35,'') AS preorder_mode
-       FROM ic_inventory i
-       LEFT JOIN ic_inventory_detail d ON d.ic_code = i.code
-       WHERE i.code = ANY($1)`,
-      [allCodes]
-    );
-    for (const row of modeRs.rows) {
-      preorderModeMap.set(String(row.code), row.preorder_mode || 'default');
-    }
-  }
-
-  const normalStockMap = new Map();
-  for (const [whCode, codeSet] of normalCodesByWh.entries()) {
-    const codes = [...codeSet];
-    if (codes.length === 0) continue;
-    const normalStockRs = await client.query(
-      `WITH raw_stock AS (
-         SELECT s.ic_code, SUM(s.balance_qty) AS balance_qty
-         FROM sml_ic_function_stock_balance_warehouse_location(current_date, $1, $2, '') s
-         WHERE s.balance_qty > 0
-         GROUP BY s.ic_code
-       )
-       SELECT u.ic_code, u.code AS unit_code,
-              COALESCE(TRUNC((COALESCE(rs.balance_qty,0) * $3 / 100) / COALESCE(NULLIF(u.ratio,0),1)),0) AS balance_qty
-       FROM ic_unit_use u
-       LEFT JOIN raw_stock rs ON rs.ic_code = u.ic_code
-       WHERE u.ic_code = ANY($4)`,
-      // กรองอีกชั้นตรงจุดที่ค่าเข้าฟังก์ชัน ERP จริง เผื่อมี code path ใหม่ที่ไม่ผ่านด่านข้างบน
-      [filterErpCodeList(codes).join(','), whCode, stockPercent, codes]
-    );
-    for (const row of normalStockRs.rows) {
-      normalStockMap.set(`${row.ic_code}::${row.unit_code}::${whCode}`, toInt(row.balance_qty, 0));
-    }
-  }
-
-  const setStockMap = new Map();
-  for (const [whCode, codeSet] of setCodesByWh.entries()) {
-    const codes = [...codeSet];
-    if (codes.length === 0) continue;
-    const setStockRs = await client.query(
-      `WITH set_detail AS (
-         SELECT d.ic_set_code, d.ic_code, d.qty
-         FROM ic_inventory_set_detail d
-         WHERE d.ic_set_code = ANY($1)
-       ),
-       set_component_stock AS (
-         SELECT d.ic_set_code, d.ic_code, d.qty, SUM(COALESCE(f.balance_qty,0)) AS sum_balance_qty
-         FROM set_detail d
-         LEFT JOIN LATERAL (
-           SELECT balance_qty
-           FROM sml_ic_function_stock_balance_warehouse_location(current_date, d.ic_code, $2, '')
-           WHERE balance_qty > 0
-         ) f ON TRUE
-         GROUP BY d.ic_set_code, d.ic_code, d.qty
-       )
-       SELECT ic_set_code, COALESCE(MIN(TRUNC((sum_balance_qty * $3 / 100) / NULLIF(qty,0))),0) AS balance_qty
-       FROM set_component_stock
-       GROUP BY ic_set_code`,
-      [codes, whCode, stockPercent]
-    );
-    for (const row of setStockRs.rows) {
-      setStockMap.set(`${row.ic_set_code}::${whCode}`, toInt(row.balance_qty, 0));
-    }
-  }
-
-  const stockIssues = [];
-  for (const item of rootItems) {
-    const itemCode = String(item.item_code || '').trim();
-    const unitCode = String(item.unit_code || '').trim();
-    const whCode = String(item.wh_code || '').trim();
-    const qty = toInt(item.qty, 0);
-    const isSet = String(item.item_type) === '3';
-    const balanceQty = isSet ? (setStockMap.get(`${itemCode}::${whCode}`) ?? 0) : (normalStockMap.get(`${itemCode}::${unitCode}::${whCode}`) ?? 0);
-    const preorderAllowed = resolvePreorderAllowed(preorderModeMap.get(itemCode), preorderDefaultEnabled);
-    const preorderLine = isPreorderLine(item, orderIsPreorder);
-
-    if (preorderLine && !preorderAllowed) {
-      stockIssues.push({
-        item_code: itemCode,
-        item_name: item.item_name || '',
-        unit_code: unitCode,
-        qty,
-        balance_qty: balanceQty,
-        shortage_qty: Math.max(0, qty - balanceQty),
-        issue_type: 'preorder_not_allowed',
-        preorder_allowed: preorderAllowed,
-      });
-      continue;
-    }
-
-    if (!preorderLine && qty > balanceQty) {
-      stockIssues.push({
-        item_code: itemCode,
-        item_name: item.item_name || '',
-        unit_code: unitCode,
-        qty,
-        balance_qty: balanceQty,
-        shortage_qty: Math.max(0, qty - balanceQty),
-        issue_type: preorderAllowed ? 'preorder_split_required' : 'exceeding',
-        preorder_allowed: preorderAllowed,
-      });
-    }
-  }
-
-  if (stockIssues.length > 0) {
-    throw makeOrderStockError(stockIssues);
-  }
-}
 
 async function loadTaxTypeMap(client, items) {
   const codes = getOrderItemCodes(items);
@@ -629,7 +473,8 @@ function summarizeOrderVat(items, taxTypeMap, vatType, vatRate, discountWord = '
 }
 
 // POST /service/v1/sendorder
-router.post('/sendorder', async (req, res) => {
+router.use(require('./pendingOrders')(summarizeOrderVat));
+router.post('/sendorder', pendingIdentity, async (req, res) => {
   try {
     let obj = req.body;
     if (typeof obj === 'string') obj = JSON.parse(obj);
@@ -662,7 +507,7 @@ router.post('/sendorder', async (req, res) => {
       vehicle: String(obj.pickup_vehicle || '').trim().slice(0, 40)
     };
     const contact_code = obj.contact_code || '';
-    const emp_code = obj.emp_code || '';
+    const emp_code = '';
     const credit_day = obj.credit_day || '0';
     const credit_date = obj.credit_date || doc_date;
     const branch_code = '00000';
@@ -677,7 +522,15 @@ router.post('/sendorder', async (req, res) => {
     const safeVatRate = Number.isNaN(vat_rate) ? 7 : vat_rate;
     const safeDiscountType = Number.isNaN(discount_type) ? 0 : discount_type;
     const safeDiscountVatType = Number.isNaN(discount_vat_type) ? 0 : discount_vat_type;
-    const orderIsPreorder = isPreorderDocument(doc_no, remark);
+    const orderIsPreorder = false;
+    const requestId = String(obj.request_id || '').trim() || `auto:${uuidv4()}`;
+    if (requestId.length > 64) return res.status(400).json({ success: false, message: 'request_id ยาวเกินกำหนด' });
+    // Return the saved result before price/promotion validation on network retries.
+    const previous = await query('SELECT cust_code,response_json FROM marketplace_order_request WHERE request_id=$1', [requestId]);
+    if (previous.rows.length) {
+      if (previous.rows[0].cust_code !== cust_code) return res.status(409).json({ success: false, message: 'คำขอนี้ถูกใช้แล้ว' });
+      return res.json({ success: true, ...JSON.parse(previous.rows[0].response_json), duplicate: true });
+    }
 
     if (items.length === 0) {
       return res.status(400).json({ success: false, msg: 'items is empty', message: 'ไม่พบรายการสินค้า' });
@@ -690,6 +543,7 @@ router.post('/sendorder', async (req, res) => {
     if (!serverIssuesDocNo && !String(doc_no).trim()) {
       return res.status(400).json({ success: false, msg: 'doc_no is empty', message: 'ไม่พบเลขที่เอกสาร' });
     }
+    if (!serverIssuesDocNo && !isValidDocNoParam(doc_no)) return res.status(400).json({ success: false, message: 'เลข QT ไม่ถูกต้อง' });
 
     if (!String(cust_code).trim()) {
       return res.status(400).json({ success: false, msg: 'cust_code is empty', message: 'ไม่พบรหัสลูกค้า กรุณาเข้าสู่ระบบใหม่' });
@@ -728,7 +582,7 @@ router.post('/sendorder', async (req, res) => {
     //    (วัดจริงแล้วตอนอยู่ในทรานแซกชัน: 25 คนพร้อมกัน = ล้มทั้งหมด)
     //
     // เป็นการตรวจแบบอ่านอย่างเดียว ไม่ต้องอยู่ในทรานแซกชันเดียวกับการเขียน
-    // ด่านที่ตัดสินขั้นสุดท้ายเรื่องสต็อกยังอยู่ในทรานแซกชันเหมือนเดิม
+    // ไม่มีด่านสต็อกสำหรับคำขอ 300; พนักงานเลือกคลังตอนยืนยัน
     //
     // ใช้ items ต้นฉบับ ไม่ใช่ expandedItems เพราะบรรทัดของแถมถูกบังคับราคา 0 ฝั่ง server อยู่แล้ว
     try {
@@ -817,15 +671,13 @@ router.post('/sendorder', async (req, res) => {
       }
     }
 
-    const docPattern = await getOrderDocPattern();
-
     // idempotency key จาก client — กันกดซ้ำ/axios retry/refresh/เปิด 2 แท็บ (REQ4)
     // ถ้าไม่ส่งมา (client เก่า) จะสุ่มให้ = ไม่ idempotent แต่ของเดิมไม่พัง
-    const requestId = String(obj.request_id || '').trim() || `auto:${uuidv4()}`;
 
     const saveResult = await withTransaction(async (client) => {
       // lock ที่ 1: ต่อ request — ไม่มี contention ข้ามลูกค้า
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [`sendorder:req:${requestId}`]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [`sendorder:checkout:${cust_code}:${requestId.split(':')[0]}`]);
 
       const prevRs = await client.query(
         'SELECT cust_code, response_json FROM marketplace_order_request WHERE request_id = $1 LIMIT 1',
@@ -846,6 +698,8 @@ router.post('/sendorder', async (req, res) => {
       // โหมด client (ค่าเริ่มต้น): ยังใช้ doc_no ที่ client ส่งมา + duplicate check แบบเดิม
       if (!serverIssuesDocNo) {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [`sendorder:${doc_no}`]);
+        const reserved = await client.query('SELECT doc_no FROM marketplace_pending_order WHERE reserved_qt_no=$1', [doc_no]);
+        if (reserved.rows.length) throw Object.assign(new Error('เลข QT นี้ถูกจองแล้ว กรุณาเริ่มคำขอใหม่'), { statusCode: 409 });
         const duplicateRs = await client.query(
           `SELECT doc_no, cust_code
            FROM ic_trans
@@ -854,11 +708,9 @@ router.post('/sendorder', async (req, res) => {
           [doc_no]
         );
         if (duplicateRs.rows.length > 0) {
-          const existing = duplicateRs.rows[0];
-          if (String(existing.cust_code || '') !== String(cust_code || '')) {
-            throw new Error('duplicate_doc_no_customer_mismatch');
-          }
-          return { duplicate: true, doc_no };
+          // Only request_id replays prove this checkout was saved. An old QT with
+          // the same number must not make a new cart appear successfully submitted.
+          throw Object.assign(new Error('เลข QT นี้ถูกใช้แล้ว กรุณาเริ่มคำขอใหม่'), { statusCode: 409 });
         }
       }
 
@@ -869,6 +721,9 @@ router.post('/sendorder', async (req, res) => {
         vatType: safeVatType,
         vatRate: safeVatRate,
         docDate: doc_date,
+        skipStock: true,
+        stockPercent: 100,
+        preorderDefaultEnabled: false,
       });
 
       // ตรวจว่าลูกค้ามีจริงก่อนทุกอย่าง — ไม่งั้นได้เอกสารกำพร้าที่ ERP อ้างอิงกลับไม่ได้
@@ -877,16 +732,19 @@ router.post('/sendorder', async (req, res) => {
       // ตรวจ Maximum Allowance ก่อนตรวจสต็อก — ใช้ items ต้นฉบับ (ก่อน expand)
       // เพราะลิมิตกำหนดกับสิ่งที่ลูกค้าเลือกสั่ง ไม่ใช่บรรทัดของแถมที่ระบบแถมให้เอง
       await validateOrderMaxAllowance(client, items, await loadCheckoutQtySoFar(client, requestId, cust_code));
-      await validateOrderStockAndPreorder(client, expandedItems, { orderIsPreorder });
+      // Allocation belongs to staff; no default-warehouse stock/preorder gate.
+      for (const item of expandedItems) {
+        item.wh_code = '';
+        item.shelf_code = '';
+      }
       const documentRemark = mergePreorderRemark(buildDeliveryRemark(send_type, shipAddress, remark, pickupInfo), orderIsPreorder);
       const contactRemark5 = await resolveContactRemark5(client, cust_code, contact_code);
 
       // ภาษีคำนวณจากรหัสสินค้า ไม่ได้ขึ้นกับว่าบรรทัดอยู่ใบไหน → โหลดครั้งเดียวนอกลูปเอกสาร
       const taxTypeMap = await loadTaxTypeMap(client, expandedItems);
 
-      // แบ่งเป็นเอกสารย่อยตามจำนวนบรรทัดที่ ERP รับได้ (REQ4)
-      // โหมด client ไม่แบ่งเสมอ เพราะเลขเอกสารมาจาก client มาใบเดียว ไม่มีเลขให้ใบที่ 2
-      const maxLinesPerDoc = serverIssuesDocNo ? await getErpMaxLinesPerDoc(client) : 0;
+      // คำขอ 300 เก็บใบเดียวเสมอ; แบ่ง QT ตามกติกา ERP ตอนพนักงานยืนยัน
+      const maxLinesPerDoc = 0;
       const docChunks = splitItemsIntoDocuments(expandedItems, maxLinesPerDoc);
 
       // เขียนเอกสาร 1 ใบ — เนื้อในคัดลอกจากโค้ดเดิมทั้งบล็อก
@@ -902,12 +760,12 @@ router.post('/sendorder', async (req, res) => {
             remark,remark_5,send_type,total_except_vat,credit_day,credit_date,branch_code
           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
           [
-            safeInquiryType, safeVatType, 2, 30,
+            safeInquiryType, safeVatType, 2, 300,
             doc_date, docNo, cust_code, send_date,
             toInt(send_day, 0), safeVatRate,
             totals.totalValue, totals.totalVatValue,
             totals.totalAfterVat, totals.totalAmount,
-            totals.totalBeforeVat, doc_time, 'QT', 'market', emp_code,
+            totals.totalBeforeVat, doc_time, 'MPR', 'market', emp_code,
             totals.totalDiscount, documentRemark, contactRemark5, toInt(send_type, 0),
             totals.totalExceptVat, toInt(credit_day, 0), credit_date, branch_code,
           ]
@@ -926,7 +784,7 @@ router.post('/sendorder', async (req, res) => {
           `INSERT INTO ic_trans_shipment (
             doc_no, doc_date, trans_flag, cust_code,
             transport_name, transport_address, transport_telephone, create_date_time_now
-          ) VALUES ($1,$2,30,$3,$4,$5,$6,NOW())`,
+          ) VALUES ($1,$2,300,$3,$4,$5,$6,NOW())`,
           [docNo, doc_date, cust_code, shipAddress, shipAddressName, shipTelephone]
         );
 
@@ -949,7 +807,7 @@ router.post('/sendorder', async (req, res) => {
               [
                 '', toNumber(it.price, 0), 0,  // set_ref_price = price (Java bindDetail setRefPrice=price)
                 0, '', '',
-                0, safeInquiryType, safeVatType, 2, 30,
+                0, safeInquiryType, safeVatType, 2, 300,
                 doc_date, docNo, cust_code, branch_code, emp_code,
                 it.item_code, it.item_name, it.unit_code,
                 toNumber(it.qty, 0), toNumber(it.price, 0),
@@ -981,7 +839,7 @@ router.post('/sendorder', async (req, res) => {
               [
                 '', 0, 0,
                 3, '', guid,
-                0, safeInquiryType, safeVatType, 2, 30,
+                0, safeInquiryType, safeVatType, 2, 300,
                 doc_date, docNo, cust_code, branch_code, emp_code,
                 it.item_code, it.item_name, it.unit_code,
                 toNumber(it.qty, 0), toNumber(it.price, 0),
@@ -1018,7 +876,7 @@ router.post('/sendorder', async (req, res) => {
                 [
                   guid, toNumber(sub.price, 0), toNumber(sub.qty, 0),
                   0, it.item_code, '',
-                  toNumber(sub.price_ratio, 0), safeInquiryType, safeVatType, 2, 30,
+                  toNumber(sub.price_ratio, 0), safeInquiryType, safeVatType, 2, 300,
                   doc_date, docNo, cust_code, branch_code, emp_code,
                   sub.item_code, sub.item_name, sub.unit_code,
                   qty, toNumber(sub.price, 0),
@@ -1039,9 +897,7 @@ router.post('/sendorder', async (req, res) => {
 
       // lock ที่ 2: ออกเลขเอกสาร — จับตรงนี้เท่านั้น หลัง expand/validate/split เสร็จแล้ว
       // เพราะ lock นี้ global ต่อวัน ถ้าจับก่อนหน้าจะทำให้ checkout ทั้งระบบต่อคิวกัน (REQ4)
-      const mainDocNo = serverIssuesDocNo
-        ? await resolveMainDocNo(client, { pattern: docPattern, docDate: doc_date, transFlag: 30 })
-        : doc_no;
+      const mainDocNo = await resolveMainDocNo(client, { pattern: 'MPRYYMMDD######', docDate: doc_date, transFlag: 300 });
       const subDocNos = docChunks.map((_, i) => formatSubDocNo(mainDocNo, i + 1, docChunks.length));
 
       for (let i = 0; i < docChunks.length; i++) {
@@ -1069,17 +925,16 @@ router.post('/sendorder', async (req, res) => {
         doc_time,
         is_preorder: orderIsPreorder,
         request_id: requestId,
+        trans_flag: 300,
+        status: 'pending',
       };
 
-      // แผนที่เลขย่อย→เลขหลัก + บันทึก response ไว้ตอบซ้ำถ้ากดยืนยันซ้ำ (REQ4)
-      // PK ของ sub_doc_no เป็น safety net กันเลขซ้ำระดับ DB
-      for (let i = 0; i < response.sub_doc_nos.length; i++) {
-        await client.query(
-          `INSERT INTO marketplace_order_document (sub_doc_no, main_doc_no, seq, doc_kind, request_id, cust_code)
-           VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (sub_doc_no) DO NOTHING`,
-          [response.sub_doc_nos[i], mainDocNo, i + 1, orderIsPreorder ? 'preorder' : 'ready', requestId, cust_code]
-        );
-      }
+      // เก็บ lifecycle/เลข QT ที่จอง และ response สำหรับ idempotent retries
+      await client.query(
+        `INSERT INTO marketplace_pending_order (doc_no,request_id,cust_code,doc_source,reserved_qt_no,metadata)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+        [mainDocNo, requestId, cust_code, docSource, serverIssuesDocNo ? null : doc_no,
+          JSON.stringify(requestMetadata(expandedItems, discount_word, safeDiscountType, safeDiscountVatType))]);
       await client.query(
         `INSERT INTO marketplace_order_request (request_id, cust_code, response_json)
          VALUES ($1,$2,$3) ON CONFLICT (request_id) DO NOTHING`,
@@ -1091,6 +946,7 @@ router.post('/sendorder', async (req, res) => {
 
     return res.json({ success: true, ...saveResult, duplicate: !!saveResult?.duplicate });
   } catch (ex) {
+    if (ex.statusCode && !ex.code) return res.status(ex.statusCode).json({ success: false, message: ex.message });
     if (ex.message === 'duplicate_doc_no_customer_mismatch') {
       return res.status(409).json({
         success: false,

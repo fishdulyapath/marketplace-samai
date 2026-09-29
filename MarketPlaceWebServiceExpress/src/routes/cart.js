@@ -176,18 +176,7 @@ router.post('/additemtocart', async (req, res) => {
           return res.status(400).json({ ERROR: `โปรโมชันของแถมไม่พร้อมใช้งาน: ${premiumCode}` });
         }
 
-        const requestedQty = toInt(item.qty, 1);
-        const availableQty = toInt(detail.balance_qty ?? detail.stock_qty, 0);
-        if (requestedQty > availableQty && !detail.preorder_allowed) {
-          return res.status(400).json({
-            ERROR: `โปรโมชันของแถมมีสินค้าไม่ครบชุด: ${premiumCode}`,
-            msg: 'SALE_PREMIUM_STOCK_INVALID',
-            sale_premium_code: premiumCode,
-            qty: requestedQty,
-            balance_qty: availableQty,
-            shortage_qty: Math.max(0, requestedQty - availableQty),
-          });
-        }
+        // Pending requests are allocated by staff; stock is not a cart admission rule.
 
         item.item_code = detail.premium_code;
         item.item_name = detail.premium_name;

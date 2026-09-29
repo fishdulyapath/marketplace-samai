@@ -54,6 +54,9 @@ security:
 
 components:
   securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
     GUIDHeader:
       type: apiKey
       in: header
@@ -555,11 +558,15 @@ components:
 
     SendOrderRequest:
       type: object
-      required: [doc_no, doc_date, cust_code, total_after_vat, items]
+      required: [cust_code, items]
       properties:
+        request_id:
+          type: string
+          maxLength: 64
+          description: Idempotency key; reuse on uncertain retries
         doc_no:
           type: string
-          description: Should contain "MQT" to appear in getOrderHistory
+          description: Required in client numbering mode; reserved for the future QT, not the MPR number
           example: "MQT2401150001"
         doc_date:
           type: string
@@ -579,7 +586,7 @@ components:
           default: "0"
         total_after_vat:
           type: string
-          description: Total incl. VAT — server calculates total_before_vat and total_vat_value at 7%
+          description: Client total hint; server calculates totals using validated lines and VAT options
           example: "1284.00"
         total_value:
           type: string
@@ -597,6 +604,7 @@ components:
           type: string
         emp_code:
           type: string
+          description: Ignored for pending orders; QT sale_code comes from the confirming employee token
         credit_day:
           type: string
           default: "0"
@@ -1724,16 +1732,14 @@ paths:
   /sendorder:
     post:
       tags: [Order]
-      summary: สร้างออเดอร์ใหม่ (QT)
+      security: [{ BearerAuth: [] }]
+      summary: ส่งคำขอรอจัดคลัง (MPR/300)
       description: |
-        Insert header → ic_trans (trans_flag=30, doc_format_code='QT')
-        Insert detail → ic_trans_detail
-
-        รองรับ item_type "0" (ปกติ) และ "3" (ชุด + sub_item)
-
-        - VAT rate = **7%** เสมอ — server คำนวณ total_before_vat/total_vat_value เอง
-        - `doc_no` ควรมี **"MQT"** เพราะ getOrderHistory filter ด้วย `LIKE '%MQT%'`
-        - ทุก insert อยู่ใน **single transaction** — sub_item fail → rollback ทั้งออเดอร์
+        Server creates one MPR document with trans_flag=300 and empty warehouse/shelf.
+        Customer, price, product, promotion and maximum allowance validation still applies.
+        No stock/preorder gate or ready/preorder split. Staff later allocates and confirms QT/30.
+        Client doc_no is reserved only in client numbering mode. Reuse request_id on retries.
+        Header, details, shipment and lifecycle are saved in one transaction.
       requestBody:
         required: true
         content:
@@ -1741,15 +1747,137 @@ paths:
             schema: { $ref: '#/components/schemas/SendOrderRequest' }
       responses:
         '200':
-          description: สร้างสำเร็จ
+          description: ส่งคำขอแล้ว รอพนักงานจัดคลัง
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/SuccessOnly' }
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  doc_no: { type: string, example: MPR260929000001 }
+                  main_doc_no: { type: string }
+                  sub_doc_nos: { type: array, items: { type: string } }
+                  doc_count: { type: integer }
+                  doc_date: { type: string, format: date }
+                  doc_time: { type: string }
+                  request_id: { type: string }
+                  trans_flag: { type: integer, enum: [300] }
+                  status: { type: string, enum: [pending] }
+                  is_preorder: { type: boolean, enum: [false] }
+                  duplicate: { type: boolean }
         '400':
           description: Error (plain text)
           content:
             text/plain:
               schema: { type: string }
+
+  /admin/pending-orders:
+    get:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: รายการรอจัดคลัง (employee + admin.orders)
+      description: See pending-orders.md for response fields and lifecycle rules.
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to, in: query, schema: { type: string, format: date } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200': { description: 'Pending queue: success, data, total, page, page_size (20)' }
+        '403': { description: Employee token and admin.orders required }
+
+  /pending-orders:
+    get:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: คำขอของลูกค้า (pending/cancelled/rejected)
+      description: Confirmed MPR requests are hidden; the customer sees their QT in normal history.
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to, in: query, schema: { type: string, format: date } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: cust_code, in: query, description: Required for authorized staff viewing a customer, schema: { type: string } }
+      responses:
+        '200': { description: 'Customer requests: success, data, total, page, page_size (20)' }
+        '403': { description: Customer ownership or staff permission required }
+
+  /pending-orders/{docNo}:
+    parameters:
+      - { name: docNo, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: รายละเอียดคำขอและสินค้า
+      responses:
+        '200': { description: 'data contains header, status, reason, qt_doc_no and items with nested set components' }
+        '403': { description: Customer ownership or staff permission required }
+        '404': { description: Request not found }
+
+  /admin/pending-orders/{docNo}/confirm:
+    parameters:
+      - { name: docNo, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: ยืนยันสร้าง QT/30 (employee + admin.orders)
+      description: Uses only persisted commercial data. Set children inherit the root allocation. No stock check. sale_code comes only from employee token. Serialized with cancellation/rejection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allocations]
+              properties:
+                allocations:
+                  type: array
+                  items:
+                    type: object
+                    required: [line_number, wh_code, shelf_code]
+                    properties:
+                      line_number: { type: integer }
+                      wh_code: { type: string }
+                      shelf_code: { type: string }
+      responses:
+        '200': { description: 'success, doc_no, sub_doc_nos, request_doc_no, duplicate; repeated confirmation returns the same QT' }
+        '400': { description: Missing allocation or invalid master warehouse/shelf relationship }
+        '403': { description: Employee token and admin.orders required }
+        '409': { description: Request closed or QT number unavailable }
+
+  /admin/pending-orders/{docNo}/reject:
+    parameters:
+      - { name: docNo, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: ปฏิเสธคำขอ (employee + admin.orders)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '200': { description: Rejected; no QT or SOC created }
+        '400': { description: Reason required }
+        '403': { description: Employee token and admin.orders required }
+        '409': { description: Request already confirmed or cancelled }
+
+  /pending-orders/{docNo}/cancel:
+    parameters:
+      - { name: docNo, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: ลูกค้ายกเลิกคำขอ pending ของตนเอง
+      responses:
+        '200': { description: Cancelled; no QT or SOC created }
+        '403': { description: Customer ownership required; employees use rejection instead }
+        '409': { description: Request already confirmed or rejected }
 
   /pay:
     post:

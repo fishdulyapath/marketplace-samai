@@ -44,7 +44,7 @@ let priceLoadToken = 0;
 
 const appLogo = computed(() => resolvePublicAsset(import.meta.env.VITE_APP_LOGO || ''));
 const lineContactUrl = computed(() => import.meta.env.VITE_APP_LINE_URL || '');
-const displayCompanyName = computed(() => companyProfile.value.company_name || companyProfile.value.company_name_1 || siteName);
+const displayCompanyName = computed(() => import.meta.env.VITE_APP_COMPANY_NAME || companyProfile.value.company_name || companyProfile.value.company_name_1 || siteName);
 const displayCompanyAddress = computed(() => companyProfile.value.address || companyProfile.value.address_1 || '');
 const displayCompanyPhone = computed(() => import.meta.env.VITE_APP_PHONE || companyProfile.value.telephone_number || companyProfile.value.tel || companyProfile.value.phone || '');
 const currentYear = new Date().getFullYear();
@@ -1214,10 +1214,8 @@ const productImagePlaceholder = ProductService.getPlaceholderImage();
                 <div class="footer-main">
                     <section class="footer-brand">
                         <div class="footer-brand-head">
-                            <img v-if="appLogo" :src="appLogo" :alt="displayCompanyName" @error="$event.target.style.display = 'none'" />
-                            <div>
-                                <h2>{{ displayCompanyName }}</h2>
-                            </div>
+                            <img v-if="appLogo" :src="appLogo" :alt="displayCompanyName" class="footer-brand-logo" @error="$event.target.style.display = 'none'" />
+                            <h2 :class="{ 'sr-only': appLogo }">{{ displayCompanyName }}</h2>
                         </div>
                         <div class="footer-contact-list">
                             <p>🚚 จัดส่งฟรีตามพื้นที่ (ข้ามเขต/ข้ามจังหวัด)ยอดซื้อ 5,001 บาทขึ้นไป</p>
@@ -2014,9 +2012,9 @@ const productImagePlaceholder = ProductService.getPlaceholderImage();
     gap: 0.9rem;
 }
 
-.footer-brand-head img {
-    width: 4.5rem;
-    height: 4.5rem;
+.footer-brand-logo {
+    width: clamp(9.5rem, 14vw, 12rem);
+    height: 3.5rem;
     flex: 0 0 auto;
     object-fit: contain;
 }

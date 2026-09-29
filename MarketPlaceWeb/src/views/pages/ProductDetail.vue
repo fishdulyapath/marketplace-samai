@@ -6,9 +6,9 @@ import ProductService from '@/services/ProductService';
 import { useAuthenStore } from '@/stores/authen';
 import { useCartStore } from '@/stores/cartStore';
 import { useLanguageStore } from '@/stores/languageStore';
-import { getRemainingAddableQty, normalizeMaxOrderQty } from '@/utils/cartLimits';
+import { normalizeMaxOrderQty } from '@/utils/cartLimits';
 import { pickProductName } from '@/utils/languageDisplay';
-import { getPreorderSplit, isPreorderAllowed, toOrderQty, toStockQty } from '@/utils/preorderSplit';
+import { isPreorderAllowed, toOrderQty, toStockQty } from '@/utils/preorderSplit';
 import { sanitizeProductDescription } from '@/utils/productDescription';
 import { formatCartUnitSummary, summarizeCartUnits } from '@/utils/cartUnitSummary';
 import { buildUnitRatioText, collectProductUnits } from '@/utils/unitConversion';
@@ -261,40 +261,12 @@ const remainingAllowanceToAdd = computed(() => {
     return Math.max(0, max - quantityInCart.value);
 });
 
-// ฟังก์ชันสำหรับตรวจสอบว่าเกินยอดคงเหลือหรือไม่
-const exceedsAvailableStock = computed(() => {
-    if (!currentUnit.value) return false;
-
-    const maxStock = toStockQty(currentUnit.value.balance_qty);
-    return maxStock !== null && totalSelectedWithCart.value > maxStock;
-});
-
-const remainingStockToAdd = computed(() => {
-    if (!currentUnit.value) return 0;
-
-    const maxStock = toStockQty(currentUnit.value.balance_qty);
-    if (maxStock === null) return 0;
-    const inCartQty = cartStore.cartItems.find((item) => item.item_code === (product.value.id || product.value.code) && item.unit_code === currentUnit.value.unit_code)?.qty || 0;
-
-    return Math.max(0, maxStock - toOrderQty(inCartQty));
-});
 
 const hasReachedMaxAllowance = computed(() => remainingAllowanceToAdd.value !== null && remainingAllowanceToAdd.value <= 0);
-const remainingAddableQty = computed(() => getRemainingAddableQty(remainingStockToAdd.value, remainingAllowanceToAdd.value));
-
-// สต็อกทั้งหมดของหน่วยนี้ (ไม่หักของในตะกร้า) — quantity เป็นยอดรวมแล้ว
-const maxStockForUnit = computed(() => {
-    if (!currentUnit.value) return 0;
-    const stock = toStockQty(currentUnit.value.balance_qty);
-    return stock === null ? 0 : Math.max(0, Math.trunc(stock));
-});
 
 // เพดานที่ stepper กดขึ้นได้ — null = ไม่จำกัด
 const maxCartQtyForUnit = computed(() => {
-    const allowance = maxAllowanceForUnit.value;
-    if (currentUnit.value && isPreorderAllowed(currentUnit.value)) return allowance;
-    if (allowance === null) return maxStockForUnit.value;
-    return Math.min(allowance, maxStockForUnit.value);
+    return maxAllowanceForUnit.value;
 });
 
 // "1 ลัง = 8 แพ็ค = 24 ถุง" (รีวิว 260908 สไลด์ 1)
@@ -354,74 +326,17 @@ function setCartUnitBusy(key, busy) {
     pendingCartKeys.value = next;
 }
 
-const isSoldOut = computed(() => currentUnit.value?.sold_out === '1');
-const isPreorderOnlyAvailable = computed(() => {
-    if (!currentUnit.value || !isPreorderAllowed(currentUnit.value)) return false;
-    const stockQty = toStockQty(currentUnit.value.balance_qty);
-    return stockQty !== null && stockQty <= 0;
-});
 const detailStockBadge = computed(() => {
-    if (isSoldOut.value) {
-        return { text: t('productDetail.soldOut'), className: 'is-out' };
-    }
-    if (isPreorderOnlyAvailable.value) {
-        return { text: t('productDetail.preorderLabel'), className: 'is-preorder' };
-    }
-    return { text: t('productDetail.inStock'), className: '' };
+    return { text: 'พนักงานจัดคลังหลังรับคำขอ', className: '' };
 });
 const currentPrice = computed(() => toProductNumber(currentUnit.value?.price, 0));
 const hasValidPrice = computed(() => !isLoggedIn.value || currentPrice.value > 0);
 const hasPriceError = computed(() => !!priceLoadError.value);
-const soldOutDetailText = computed(() => {
-    if (!currentUnit.value) return t('productDetail.unitSoldOut');
-    const stockQty = toStockQty(currentUnit.value.balance_qty);
-    if (!isPreorderAllowed(currentUnit.value) && stockQty !== null && stockQty <= 0) {
-        return t('productDetail.preorderOutOfStockHint');
-    }
-    return t('productDetail.unitSoldOut');
-});
 const priceWarningText = computed(() => {
     if (priceLoadError.value && priceLoadError.value !== 'ZERO_PRICE') {
         return t('productDetail.priceCheckFailed');
     }
     return t('productDetail.noUnitPrice');
-});
-const availableStockQtyForThisAdd = computed(() => {
-    if (!currentUnit.value) return 0;
-    const stockQty = toStockQty(currentUnit.value.balance_qty);
-    if (stockQty === null) return null;
-    return Math.max(0, stockQty - quantityInCart.value);
-});
-const availableStockForThisAdd = computed(() => availableStockQtyForThisAdd.value ?? 0);
-const preorderPreview = computed(() => {
-    if (!currentUnit.value) return { readyQty: 0, preorderQty: 0, totalQty: 0, hasPreorder: false };
-    return getPreorderSplit({
-        qty: toOrderQty(quantity.value),
-        balance_qty: maxStockForUnit.value,
-        preorder_allowed: currentUnit.value.preorder_allowed,
-    });
-});
-const cartPreorderPreview = computed(() => {
-    if (!currentUnit.value) return { readyQty: 0, preorderQty: 0, totalQty: 0, hasPreorder: false };
-    return getPreorderSplit({
-        qty: toOrderQty(quantity.value),
-        balance_qty: currentUnit.value.balance_qty,
-        preorder_allowed: currentUnit.value.preorder_allowed,
-    });
-});
-const preorderCanStart = computed(() => isLoggedIn.value && currentUnit.value && !isSoldOut.value && isPreorderAllowed(currentUnit.value));
-const preorderCanStartWithinAllowance = computed(() => {
-    if (!preorderCanStart.value) return false;
-    const allowance = remainingAllowanceToAdd.value;
-    return allowance === null || allowance > availableStockForThisAdd.value;
-});
-const preorderActionHint = computed(() => {
-    if (!currentUnit.value || !isLoggedIn.value || isSoldOut.value) return '';
-    if (preorderPreview.value.isBlockedByPreorderSetting) return t('productDetail.preorderBlockedHint');
-    if (preorderPreview.value.hasPreorder) return t('productDetail.preorderSplitHint');
-    if (preorderCanStart.value && availableStockForThisAdd.value > 0) return t('productDetail.preorderStartHint', { qty: availableStockForThisAdd.value, unit: currentUnit.value.unit_code });
-    if (preorderCanStart.value) return t('productDetail.preorderOnlyHint');
-    return '';
 });
 
 function getUserFacingErrorMessage(err, fallback) {
@@ -916,24 +831,6 @@ async function refreshStockAndPriceSilently() {
 
 const silentRefresh = useSilentRefresh(refreshStockAndPriceSilently);
 
-// ปุ่มลัดเหล่านี้เคยแค่ตั้งค่า quantity แล้วรอผู้ใช้กดยืนยัน
-// ตอนไม่มีปุ่มยืนยันแล้ว ต้อง commit ลงตะกร้าเองไม่งั้นกดแล้วไม่เกิดอะไรขึ้น
-function setQuantityToReadyStock() {
-    if (!currentUnit.value) return;
-    const readyQty = remainingAddableQty.value;
-    if (readyQty > 0) commitCartQty(quantityInCart.value + readyQty);
-}
-
-function startPreorderQuantity() {
-    if (!currentUnit.value || !isPreorderAllowed(currentUnit.value) || !preorderCanStartWithinAllowance.value) return;
-    commitCartQty(quantityInCart.value + Math.max(1, availableStockForThisAdd.value + 1));
-}
-
-function adjustQuantityToAvailableStock() {
-    if (!currentUnit.value) return;
-    const readyQty = remainingAddableQty.value;
-    if (readyQty > 0) commitCartQty(quantityInCart.value + readyQty);
-}
 
 // ดึงจำนวนจริงของหน่วยที่เลือกจากตะกร้ามาใส่ stepper
 function syncQuantityFromCart() {
@@ -984,28 +881,6 @@ function commitCartQty(nextQty) {
                 setCartUnitBusy(pendingKey, false);
                 syncQuantityFromCart();
             });
-        return;
-    }
-
-    if (isSoldOut.value) {
-        toast.add({
-            severity: 'warn',
-            summary: t('productDetail.soldOut'),
-            detail: soldOutDetailText.value,
-            life: 3000
-        });
-        syncQuantityFromCart();
-        return;
-    }
-
-    if (preorderPreview.value.isBlockedByPreorderSetting) {
-        toast.add({
-            severity: 'warn',
-            summary: t('productDetail.preorderNotAllowed'),
-            detail: preorderActionHint.value || t('productDetail.preorderBlockedHint'),
-            life: 3200
-        });
-        syncQuantityFromCart();
         return;
     }
 
@@ -1322,11 +1197,6 @@ function toggleFavorite() {
                         <span>{{ unitRatioText }}</span>
                     </div>
 
-                    <div v-if="isSoldOut" class="detail-soldout">
-                        <i class="pi pi-ban"></i>
-                        {{ soldOutDetailText }}
-                    </div>
-
                     <!-- รายละเอียดโปรโมชั่นที่แอดมินพิมพ์เอง (dimension_39) -->
                     <div v-if="promotionDetailHtml" class="detail-offer-box is-custom">
                         <div class="detail-offer-title">{{ t('productDetail.promotion') }}</div>
@@ -1361,8 +1231,7 @@ function toggleFavorite() {
                         <i class="pi pi-shopping-cart"></i>
                         {{ t('productDetail.inCart') }} <strong>{{ cartUnitSummaryText }}</strong>
                         <span v-if="hasReachedMaxAllowance">{{ t('productDetail.maxAllowanceReached') }}</span>
-                        <span v-else-if="cartPreorderPreview.hasPreorder">{{ t('productDetail.cartPreorderSplit', { ready: cartPreorderPreview.readyQty, preorder: cartPreorderPreview.preorderQty }) }}</span>
-                        <span v-else-if="shouldShowStock && remainingAddableQty >= 0">{{ t('productDetail.addMore', { qty: remainingAddableQty }) }}</span>
+                        <span v-else-if="remainingAllowanceToAdd !== null">{{ t('productDetail.addMore', { qty: remainingAllowanceToAdd }) }}</span>
                     </div>
 
                     <!-- RULE: hide-empty-section — กล่องสรุปสินค้าในชุดฝั่งซื้อ ใช้เงื่อนไขเดียวกับ section ด้านล่าง -->
@@ -1395,7 +1264,7 @@ function toggleFavorite() {
                         </div>
                     </div>
 
-                    <div v-if="currentUnit && !isSoldOut" class="detail-control-row">
+                    <div v-if="currentUnit" class="detail-control-row">
                         <div class="detail-label">{{ t('productDetail.quantity') }}</div>
                         <div class="detail-quantity-panel">
                             <!-- กด +/- แล้วเข้า/ออกตะกร้าทันที ไม่มีปุ่มยืนยันอีกแล้ว -->
@@ -1410,37 +1279,11 @@ function toggleFavorite() {
                                 :input-label="t('productDetail.quantityAria')"
                                 @commit="commitCartQty"
                             />
-                            <div v-if="isLoggedIn && currentUnit" class="detail-quick-qty-actions">
-                                <button v-if="remainingAddableQty > 0" type="button" @click="setQuantityToReadyStock">
-                                    <i class="pi pi-check-circle"></i>
-                                    {{ t('productDetail.readyQtyButton', { qty: remainingAddableQty, unit: currentUnit.unit_code }) }}
-                                </button>
-                                <button v-if="preorderCanStartWithinAllowance" type="button" class="is-preorder" @click="startPreorderQuantity">
-                                    <i class="pi pi-clock"></i>
-                                    {{ availableStockForThisAdd > 0 ? t('productDetail.startPreorderButton') : t('productDetail.preorderOneButton') }}
-                                </button>
-                                <button v-else-if="preorderPreview.isBlockedByPreorderSetting && remainingAddableQty > 0" type="button" class="is-warning" @click="adjustQuantityToAvailableStock">
-                                    <i class="pi pi-refresh"></i>
-                                    {{ t('productDetail.adjustToReadyStock') }}
-                                </button>
-                            </div>
                         </div>
                     </div>
 
-                    <div v-if="isLoggedIn && currentUnit && !isSoldOut && preorderPreview.totalQty > 0" class="detail-preorder-preview" :class="{ 'has-preorder': preorderPreview.hasPreorder }">
-                        <div>
-                            <span>{{ t('productDetail.readyNow') }}</span>
-                            <strong>{{ preorderPreview.readyQty }} {{ currentUnit.unit_code }}</strong>
-                        </div>
-                        <div v-if="preorderPreview.hasPreorder">
-                            <span>{{ t('productDetail.preorderLabel') }}</span>
-                            <strong>{{ preorderPreview.preorderQty }} {{ currentUnit.unit_code }}</strong>
-                        </div>
-                        <div v-else-if="preorderPreview.isBlockedByPreorderSetting" class="is-blocked">
-                            <span>{{ t('productDetail.preorderLabel') }}</span>
-                            <strong>{{ t('productDetail.preorderNotAllowed') }}</strong>
-                        </div>
-                        <p v-if="preorderActionHint" class="detail-preorder-hint">{{ preorderActionHint }}</p>
+                    <div v-if="isLoggedIn && currentUnit" class="detail-preorder-preview">
+                        <p class="detail-preorder-hint">ส่งคำขอสั่งซื้อได้ โดยพนักงานจะเลือกคลังและที่เก็บก่อนยืนยันคำสั่งซื้อ</p>
                     </div>
 
                     <!-- ปุ่ม "เพิ่มไปยังรถเข็น" ถูกตัดออกตามรีวิว 260908 — ตัวเพิ่ม/ลดจำนวน

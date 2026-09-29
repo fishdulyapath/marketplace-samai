@@ -1,4 +1,5 @@
 <script setup>
+import PendingOrders from '@/components/orders/PendingOrders.vue';
 import CartService from '@/services/CartService';
 import { PRODUCT_IMAGE_PLACEHOLDER } from '@/utils/productPlaceholder';
 import OrderHistoryService from '@/services/OrderHistoryService';
@@ -1499,6 +1500,7 @@ onMounted(fetchOrderHistory);
 <template>
     <div class="oh-page">
         <div class="oh-container">
+            <PendingOrders :cust-code="userCode" @changed="fetchOrderHistory()" />
             <!-- ══ TOP BAR ══════════════════════════════════ -->
             <div class="oh-topbar mb-4">
                 <div class="oh-topbar__left">

@@ -1,5 +1,5 @@
 param(
-    [string]$Image = "minorsoft/marketplaceasia-api",
+    [string]$Image = "minorsoft/marketplacesamai-api",
     [string]$Tag = "latest"
 )
 
@@ -9,4 +9,3 @@ $FullImage = "${Image}:${Tag}"
 docker pull $FullImage
 
 Write-Host "Pulled $FullImage"
-

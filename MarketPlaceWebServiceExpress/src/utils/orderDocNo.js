@@ -124,7 +124,7 @@ function isValidDocNoParam(value) {
 //
 // ใช้วิธี scan ic_trans แทนตาราง counter เพราะ counter จะ drift ถ้า ERP ลบ/import เอกสาร
 // แล้วออกเลขซ้ำ ส่วน scan self-healing เสมอ
-async function resolveMainDocNo(client, { pattern, docDate, transFlag = 30 }) {
+async function resolveMainDocNo(client, { pattern, docDate, transFlag = 30, includePendingReservations = false }) {
   const expanded = buildDocPattern(pattern, docDate);
   const { prefix, runLen } = splitPattern(expanded);
   if (!prefix || runLen <= 0) throw new Error(`invalid order doc pattern: ${pattern}`);
@@ -136,7 +136,10 @@ async function resolveMainDocNo(client, { pattern, docDate, transFlag = 30 }) {
     [transFlag, prefix]
   );
 
-  const next = maxRunningFromDocNos(rs.rows.map((r) => r.doc_no), prefix, runLen) + 1;
+  const reserved = includePendingReservations ? await client.query(
+    'SELECT reserved_qt_no AS doc_no FROM marketplace_pending_order WHERE reserved_qt_no LIKE $1', [`${prefix}%`]
+  ) : { rows: [] };
+  const next = maxRunningFromDocNos([...rs.rows, ...reserved.rows].map((r) => r.doc_no), prefix, runLen) + 1;
   if (next > Math.pow(10, runLen) - 1) {
     throw new Error(`order running number overflow for ${prefix}`);
   }

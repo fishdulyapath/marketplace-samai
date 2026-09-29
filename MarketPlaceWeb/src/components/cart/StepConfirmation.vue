@@ -201,8 +201,8 @@ const hasMissingPrice = computed(() => itemsWithMissingPrice.value.length > 0);
 
 const priceValidationReady = computed(() => allConfirmedItems.value.length > 0 && priceLoadProgress.value === 100 && !isLoadingItems.value && !isLoadingPrices.value);
 
-const preorderCheckoutSplit = computed(() => splitItemsForPreorder(allConfirmedItems.value));
-const preorderBlockedItems = computed(() => allConfirmedItems.value.filter((item) => getPreorderSplit(item).isBlockedByPreorderSetting));
+const preorderCheckoutSplit = computed(() => ({ readyItems: allConfirmedItems.value, preorderItems: [], hasReadyItems: true, hasPreorderItems: false }));
+const preorderBlockedItems = computed(() => []);
 const hasPreorderBlockedItems = computed(() => preorderBlockedItems.value.length > 0);
 const preorderBlockMessage = computed(() => {
     if (!hasPreorderBlockedItems.value) return '';
@@ -518,9 +518,9 @@ const readinessChecks = computed(() => [
         detail: priceBlockMessage.value || t('reviewOrder.checkedReady')
     },
     {
-        label: t('reviewOrder.stockPreorder'),
+        label: 'การจัดคลัง',
         ready: !hasPreorderBlockedItems.value,
-        detail: preorderBlockMessage.value || preorderDocumentMessage.value || t('reviewOrder.checkedReady')
+        detail: 'พนักงานจะเลือกคลังและที่เก็บหลังรับคำขอ'
     },
     {
         label: t('reviewOrder.customerInfo'),

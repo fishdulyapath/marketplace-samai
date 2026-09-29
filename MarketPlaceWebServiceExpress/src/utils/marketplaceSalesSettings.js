@@ -222,8 +222,8 @@ async function getStockDisplayPercent(client = null) {
 }
 
 // รูปแบบเลขเอกสารคำสั่งซื้อ — แก้ได้โดยไม่ต้อง deploy (REQ4)
-async function getOrderDocPattern() {
-  const value = String(await getSettingValue(SETTING_ORDER_DOC_PATTERN, DEFAULT_ORDER_DOC_PATTERN)).trim();
+async function getOrderDocPattern(client = null) {
+  const value = String(await getSettingValue(SETTING_ORDER_DOC_PATTERN, DEFAULT_ORDER_DOC_PATTERN, client)).trim();
   return value || DEFAULT_ORDER_DOC_PATTERN;
 }
 

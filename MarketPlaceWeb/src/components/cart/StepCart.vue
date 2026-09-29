@@ -198,15 +198,14 @@ const showCartSearch = computed(() => toCartNumber(props.totalCartCount, 0) > 5 
 const visibleStockIssueItems = computed(() => items.value.filter((item) => !props.isLoadingStock && isStockBlocked(item)));
 const visibleStockIssueCount = computed(() => visibleStockIssueItems.value.length);
 const hasVisibleStockIssues = computed(() => visibleStockIssueCount.value > 0);
-const preorderItems = computed(() => items.value.filter((item) => !props.isLoadingStock && getPreorderSplit(item).hasPreorder));
+const preorderItems = computed(() => []);
 const preorderLineCount = computed(() => preorderItems.value.length);
 const checkoutBlockMessage = computed(() => {
     if (props.checkoutLocked) return props.checkoutLockMessage || t('cartFlow.partialCartReviewNotice', { docNos: '-' });
-    if (props.isLoadingStock) return t('cartPage.checkingStock');
     if (hasVisibleStockIssues.value) return t('cartPage.mustFixStock', { count: visibleStockIssueCount.value });
     return '';
 });
-const isCheckoutDisabled = computed(() => isValidatingStock.value || props.isLoadingStock || hasVisibleStockIssues.value || props.checkoutLocked);
+const isCheckoutDisabled = computed(() => props.checkoutLocked);
 const checkoutButtonLabel = computed(() => {
     if (props.checkoutLocked) return t('cartPage.checkoutLocked');
     if (hasVisibleStockIssues.value) return t('cartPage.fixStockFirst');
@@ -229,10 +228,7 @@ const isOutOfStock = (item) => {
     return balanceQty !== null && balanceQty <= 0;
 };
 
-const isStockBlocked = (item) => {
-    const split = getPreorderSplit(item);
-    return split.isBlockedByPreorderSetting || (isOutOfStock(item) && !isPreorderAllowed(item));
-};
+const isStockBlocked = () => false;
 
 const getStockBlockMessage = (item) => {
     const maxQty = getMaxAvailable(item);
@@ -302,19 +298,6 @@ async function increaseQuantity(item) {
             return;
         }
 
-        // ตรวจสอบก่อนว่าเพิ่มจำนวนแล้วจะเกินสต็อกหรือไม่
-        const maxQty = getStockQtyOrNull(item);
-        if (maxQty !== null) {
-            if (!isPreorderAllowed(item) && toOrderQty(item.qty) + 1 > maxQty) {
-                toast.add({
-                    severity: 'warn',
-                    summary: t('cartPage.stockNotEnough'),
-                    detail: getStockBlockMessage(item),
-                    life: 1500
-                });
-                return;
-            }
-        }
 
         // แปลงค่าเป็นตัวเลขก่อนบวก
         const newQty = previousQty + 1;
@@ -613,54 +596,7 @@ async function proceedToCheckout() {
         return;
     }
 
-    // ตรวจสอบ stock จาก API (ครอบคลุมทุกรายการในตะกร้า รวมที่ยังไม่ได้โหลด)
-    try {
-        isValidatingStock.value = true;
-
-        // ดึง user_code จาก localStorage
-        const userData = localStorage.getItem('_userData');
-        const userObj = userData ? JSON.parse(userData) : null;
-        const custCode = userObj?.user_code;
-
-        if (!custCode) {
-            toast.add({
-                severity: 'error',
-                summary: t('common.error'),
-                detail: t('cartPage.customerMissing'),
-                life: 3000
-            });
-            return;
-        }
-
-        const response = await CartService.validateCartStock(custCode);
-
-        if (response?.data?.success) {
-            if (response.data.is_valid) {
-                // ไม่มีปัญหา stock ดำเนินการต่อได้
-                emit('next-step');
-            } else {
-                // มีปัญหา stock แสดง dialog
-                stockIssues.value = response.data.stock_issues || [];
-                showStockIssuesDialog.value = true;
-            }
-        } else {
-            // API error แต่ให้ดำเนินการต่อได้ (fallback)
-            console.warn('validateCartStock API returned unsuccessful response');
-            emit('next-step');
-        }
-    } catch (error) {
-        console.error('Error validating cart stock:', error);
-        // กรณี API error ให้แสดง error และไม่ให้ไปหน้าถัดไป
-        toast.add({
-            severity: 'error',
-            summary: t('cartPage.stockCheckFailed'),
-            detail: t('cartPage.stockCheckFailedDetail'),
-            life: 5000
-        });
-        return;
-    } finally {
-        isValidatingStock.value = false;
-    }
+    emit('next-step');
 }
 
 // ลบรายการโปรโมชันของแถมที่หมดอายุออกจากตะกร้า (REQ5)
@@ -747,19 +683,6 @@ function validateQuantity(item) {
         return;
     }
 
-    // Check if quantity exceeds available stock
-    const maxQty = getStockQtyOrNull(item);
-    if (maxQty !== null) {
-        if (!isPreorderAllowed(item) && numValue > maxQty) {
-            toast.add({
-                severity: 'warn',
-                summary: t('cartPage.stockNotEnough'),
-                detail: getStockBlockMessage(item),
-                life: 2400
-            });
-            if (maxQty > 0) numValue = maxQty;
-        }
-    }
 
     // จำกัดตามจำนวนสั่งสูงสุดต่อคำสั่งซื้อ (REQ3)
     const maxOrderQty = getMaxOrderQty(item);
@@ -904,10 +827,6 @@ function handleQuantityKeydown(event) {
                             <!-- Stock badge -->
                             <div v-if="isLoadingStock" class="cart-stock-badge cart-stock-badge--loading">
                                 <i class="pi pi-spin pi-spinner"></i> {{ t('cartPage.checkingStock') }}
-                            </div>
-                            <div v-else-if="getPreorderSplit(item).hasPreorder" class="cart-stock-badge cart-stock-badge--preorder">
-                                <i class="pi pi-clock"></i>
-                                {{ getPreorderSplitText(item) }}
                             </div>
                             <div v-else-if="!isSalePremiumItem(item) && isOutOfStock(item)" class="cart-stock-badge cart-stock-badge--out">
                                 <i class="pi pi-times-circle"></i> {{ t('cartPage.outOfStock') }}

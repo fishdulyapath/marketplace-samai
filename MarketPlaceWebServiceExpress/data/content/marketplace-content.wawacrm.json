@@ -1,7 +1,7 @@
 {
   "hero": {
     "eyebrow": "ONLINE MARKETPLACE",
-    "title": "Asiakaset Rungwilai",
+    "title": "สมัยการค้า",
     "subtitle": "เลือกสินค้า ตรวจราคา เพิ่มลงตะกร้า และสั่งซื้อสินค้าได้สะดวกผ่านหน้าร้านออนไลน์",
     "primaryLabel": "ดูสินค้า",
     "secondaryLabel": "ดูตะกร้า"
@@ -80,7 +80,7 @@
   "slides": [
     {
       "eyebrow": "ONLINE MARKETPLACE",
-      "title": "Asiakaset Rungwilai",
+      "title": "สมัยการค้า",
       "subtitle": "เลือกสินค้า ตรวจราคา เพิ่มลงตะกร้า และสั่งซื้อสินค้าได้สะดวกผ่านหน้าร้านออนไลน์",
       "ctaLabel": "ดูสินค้า",
       "href": "/marketplace",

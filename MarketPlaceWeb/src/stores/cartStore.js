@@ -3,7 +3,8 @@ import ErpOptionService from '@/services/ErpOptionService';
 import ProductService from '@/services/ProductService';
 import { normalizeMaxOrderQty } from '@/utils/cartLimits';
 import { withProductDisplay } from '@/utils/languageDisplay';
-import { PREORDER_REMARK, getPreorderSplit, splitItemsForPreorder, toOrderQty } from '@/utils/preorderSplit';
+import { clearPendingCheckout, pendingCheckoutIdentity } from '@/utils/pendingCheckout';
+import { toOrderQty } from '@/utils/preorderSplit';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
@@ -637,7 +638,7 @@ export const useCartStore = defineStore('cart', () => {
             // ซึ่งเป็น kill switch ที่ยังเปิดอยู่ ถ้าโหมดเป็น server ค่านี้จะถูกเมิน
             const docNo = generateOrderNumber();
 
-            // idempotency key: ถือค่าเดียวตลอดการกดยืนยันครั้งนี้ กันกดซ้ำ/axios retry/refresh/เปิด 2 แท็บ
+            // Persist the final identity below so uncertain retries/reloads reuse it.
             const checkoutRequestId = generateGUID();
 
             // Debug: ตรวจสอบข้อมูล items ที่ส่งมาจาก checkoutData
@@ -761,68 +762,10 @@ export const useCartStore = defineStore('cart', () => {
                 credit_date: checkoutData.credit_date || null
             };
 
-            const blockedItems = items.filter((item) => getPreorderSplit(item).isBlockedByPreorderSetting);
-            if (blockedItems.length > 0) {
-                throw createCheckoutError('มีสินค้าบางรายการเกินสต๊อกและยังไม่ได้เปิดให้ Preorder', {
-                    code: 'PREORDER_BLOCKED',
-                    needsCartFix: true,
-                    stockIssues: blockedItems.map((item) => {
-                        const split = getPreorderSplit(item);
-                        return {
-                            item_code: item.item_code,
-                            item_name: item.item_name || item.name,
-                            unit_code: item.unit_code,
-                            qty: split.totalQty,
-                            balance_qty: split.readyQty,
-                            shortage_qty: split.shortageQty,
-                            issue_type: 'preorder_not_allowed'
-                        };
-                    })
-                });
-            }
-
-            const withOrderTotals = (payload, orderItems) => {
-                const orderTotalValue = orderItems.reduce((sum, item) => sum + toCartNumber(item.sum_amount, 0), 0).toString();
-                const orderTotalExceptVat = orderItems
-                    .filter((item) => String(item.tax_type) === '1')
-                    .reduce((sum, item) => sum + toCartNumber(item.sum_amount, 0), 0)
-                    .toString();
-                const orderTotalAfterVat = orderItems
-                    .filter((item) => String(item.tax_type) === '0')
-                    .reduce((sum, item) => sum + toCartNumber(item.sum_amount, 0), 0)
-                    .toString();
-                return {
-                    ...payload,
-                    items: orderItems,
-                    total_amount: orderTotalValue,
-                    total_value: orderTotalValue,
-                    total_except_vat: orderTotalExceptVat,
-                    total_after_vat: orderTotalAfterVat,
-                };
-            };
-
-            const split = splitItemsForPreorder(items);
-            const orderPayloads = [];
-            if (split.hasReadyItems) {
-                orderPayloads.push({
-                    type: 'ready',
-                    payload: withOrderTotals({ ...orderData, doc_no: docNo, request_id: `${checkoutRequestId}:ready` }, split.readyItems),
-                });
-            }
-            if (split.hasPreorderItems) {
-                const preorderDocNo = generateOrderNumber('PREQT');
-                const preorderRemark = [PREORDER_REMARK, remarkValue].filter(Boolean).join(' ');
-                orderPayloads.push({
-                    type: 'preorder',
-                    payload: withOrderTotals(
-                        { ...orderData, doc_no: preorderDocNo, remark: preorderRemark, request_id: `${checkoutRequestId}:preorder` },
-                        split.preorderItems
-                    ),
-                });
-            }
-            if (orderPayloads.length === 0) {
-                throw new Error('ไม่พบรายการสินค้าสำหรับบันทึกเอกสาร');
-            }
+            // Staff allocates the warehouse after checkout.
+            const identity = pendingCheckoutIdentity(orderData.cust_code, orderData, { requestId: checkoutRequestId, docNo });
+            const orderPayloads = [{ type: 'pending', payload: { ...orderData, doc_no: identity.docNo, request_id: identity.requestId } }];
+            const split = { hasPreorderItems: false };
 
             // Add more detailed logging
             // console.log('Checkout process started');
@@ -853,10 +796,11 @@ export const useCartStore = defineStore('cart', () => {
                 }
 
                 await clearCart();
+                clearPendingCheckout(orderData.cust_code);
 
                 return {
                     success: true,
-                    message: 'ทำรายการสั่งซื้อเรียบร้อยแล้ว',
+                    message: 'ส่งคำขอแล้ว รอพนักงานจัดคลัง',
                     orderNumber: savedDocNos[0] || docNo,
                     orderNumbers: savedDocNos,
                     orderDocuments: savedDocuments,

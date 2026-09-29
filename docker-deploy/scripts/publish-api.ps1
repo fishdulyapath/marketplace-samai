@@ -1,5 +1,5 @@
 param(
-    [string]$Image = "minorsoft/marketplaceasia-api",
+    [string]$Image = "minorsoft/marketplacesamai-api",
     [string]$Tag = "latest"
 )
 
@@ -20,4 +20,3 @@ try {
 }
 
 Write-Host "Published $FullImage"
-

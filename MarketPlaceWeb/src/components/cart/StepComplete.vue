@@ -65,10 +65,10 @@ const displayOrderNumbers = computed(() => {
     return numbers.length > 0 ? numbers : [displayOrderNumber.value].filter(Boolean);
 });
 const isPartial = computed(() => props.partial);
-const completionTitle = computed(() => (isPartial.value ? t('orderComplete.partialTitle') : t('orderComplete.title')));
-const completionSubtitle = computed(() => (isPartial.value ? t('orderComplete.partialHint') : t('orderComplete.subtitle')));
-const completionStatusTitle = computed(() => (isPartial.value ? t('orderComplete.partialTitle') : t('orderComplete.successTitle')));
-const completionStatusHint = computed(() => (isPartial.value ? t('orderComplete.partialHint') : t('orderComplete.successHint')));
+const completionTitle = computed(() => (isPartial.value ? t('orderComplete.partialTitle') : 'ส่งคำขอแล้ว รอพนักงานจัดคลัง'));
+const completionSubtitle = computed(() => (isPartial.value ? t('orderComplete.partialHint') : 'ติดตามสถานะและยกเลิกคำขอที่ยังรอดำเนินการได้ที่ประวัติคำสั่งซื้อ'));
+const completionStatusTitle = computed(() => (isPartial.value ? t('orderComplete.partialTitle') : 'รอพนักงานยืนยัน'));
+const completionStatusHint = computed(() => (isPartial.value ? t('orderComplete.partialHint') : 'พนักงานจะเลือกคลังและที่เก็บ ก่อนยืนยันคำสั่งซื้อให้คุณ'));
 const referenceOrderText = computed(() => displayOrderNumbers.value.join(', ') || displayOrderNumber.value);
 const showDocumentList = computed(() => isPartial.value || props.preorder || displayOrderNumbers.value.length > 1);
 function getDocumentLabel(type) {

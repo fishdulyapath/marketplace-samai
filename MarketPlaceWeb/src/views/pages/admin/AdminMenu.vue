@@ -15,6 +15,13 @@ const licenseError = ref('');
 const menuItems = computed(() =>
     [
         {
+            title: 'รอดำเนินการ',
+            description: 'เลือกคลังและที่เก็บให้คำขอจากลูกค้า แล้วกดยืนยันสั่งซื้อ',
+            icon: 'pi pi-inbox',
+            to: '/admin/pending-orders',
+            permission: 'admin.orders'
+        },
+        {
             title: 'คำสั่งซื้อ',
             description: 'ดูสถานะคำสั่งซื้อทุกใบที่เข้ามา ค้นหาตามลูกค้า เลขที่ และช่วงวันที่',
             icon: 'pi pi-receipt',

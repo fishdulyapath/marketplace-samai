@@ -1,5 +1,5 @@
 param(
-    [string]$Image = "minorsoft/marketplaceasia",
+    [string]$Image = "minorsoft/marketplacesamai",
     [string]$Tag = "latest",
     [switch]$SkipNpmCi
 )

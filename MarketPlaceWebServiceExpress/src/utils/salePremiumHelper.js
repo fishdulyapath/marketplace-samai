@@ -67,17 +67,17 @@ async function resolveBasketPricingContext(queryFn, custCode) {
 
 // ข้อมูลสินค้า+หน่วย พร้อมสต็อกที่ปรับด้วย stock_display_percent แล้ว
 // ไม่กรอง item_pattern — ของแถมเป็นสินค้าอะไรก็ได้
-async function getItemUnitInfo(queryFn, itemCode, unitCode, stockPercent) {
+async function getItemUnitInfo(queryFn, itemCode, unitCode, stockPercent, skipStock = false) {
   // ⚠️ itemCode ถูกส่งเข้าฟังก์ชันสต็อกของ ERP ที่เอาไปต่อ SQL เอง $1 กันไม่ได้
   //    ดู src/utils/erpCodeGuard.js — ของแถมที่รหัสไม่สะอาดถือว่าไม่มีของ
   if (!isSafeErpCode(itemCode)) return null;
   const pct = Number.isFinite(stockPercent) ? stockPercent : 100;
   const result = await queryFn(
-    `WITH balance_stock AS (
+    `WITH balance_stock AS (${skipStock ? `SELECT $1::text AS ic_code, 0::numeric AS sum_balance_qty WHERE FALSE` : `
        SELECT ic_code, SUM(balance_qty) AS sum_balance_qty
          FROM sml_ic_function_stock_balance_warehouse_location(current_date, $1, '', '')
         WHERE balance_qty > 0
-        GROUP BY ic_code
+        GROUP BY ic_code`}
      )
      SELECT i.code AS item_code,
             COALESCE(i.name_1, i.code) AS item_name,
@@ -209,7 +209,7 @@ async function loadSalePremiumDetail(queryFn, premiumCode, options = {}) {
 
   const paidItems = [];
   for (const row of condRes.rows) {
-    const unit = await getItemUnitInfo(queryFn, safeText(row.ic_code), safeText(row.unit_code), stockPercent);
+    const unit = await getItemUnitInfo(queryFn, safeText(row.ic_code), safeText(row.unit_code), stockPercent, options.skipStock);
     if (!unit) throw new Error(`product unit not found: ${row.ic_code}/${row.unit_code}`);
     const qty = toNumber(row.qty);
     const priced = await pricedItem(unit, custCode, qty, pricingContext);
@@ -225,7 +225,7 @@ async function loadSalePremiumDetail(queryFn, premiumCode, options = {}) {
   const freeItems = [];
   for (const row of freeRes.rows) {
     // ของแถมใช้ stockPercent=100 ในการอ่านสต็อกจริง (ไม่ลดตามการแสดงผล) เพราะเป็นของที่ต้องส่งจริง
-    const unit = await getItemUnitInfo(queryFn, safeText(row.ic_code), safeText(row.unit_code), 100);
+    const unit = await getItemUnitInfo(queryFn, safeText(row.ic_code), safeText(row.unit_code), 100, options.skipStock);
     if (!unit) throw new Error(`free product unit not found: ${row.ic_code}/${row.unit_code}`);
     freeItems.push({
       ...unit,

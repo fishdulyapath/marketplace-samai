@@ -83,8 +83,8 @@ Auto-migration ไม่รัน migration ฐาน License, migration ที�
 Docker Hub image ที่ใช้:
 
 ```powershell
-minorsoft/marketplaceasia:latest
-minorsoft/marketplaceasia-api:latest
+minorsoft/marketplacesamai:latest
+minorsoft/marketplacesamai-api:latest
 ```
 
 คำสั่งผ่าน script:
@@ -96,19 +96,19 @@ minorsoft/marketplaceasia-api:latest
 เทียบเท่ากับ flow นี้ โดย script จะ build frontend `dist` ก่อน:
 
 ```powershell
-docker build -t minorsoft/marketplaceasia .
-docker tag minorsoft/marketplaceasia minorsoft/marketplaceasia:latest
-docker push minorsoft/marketplaceasia:latest
-docker pull minorsoft/marketplaceasia:latest
+docker build -t minorsoft/marketplacesamai .
+docker tag minorsoft/marketplacesamai minorsoft/marketplacesamai:latest
+docker push minorsoft/marketplacesamai:latest
+docker pull minorsoft/marketplacesamai:latest
 ```
 
 ถ้าไม่ใช้ script และต้องการ build frontend เอง ให้ copy env สำหรับ production เข้าโปรเจค frontend ก่อน เพราะค่า Vite จะถูกฝังตอน build:
 
 ```powershell
 Copy-Item .\frontend.env ..\MarketPlaceWeb\.env.production.local -Force
-docker build -t minorsoft/marketplaceasia ..\MarketPlaceWeb
-docker tag minorsoft/marketplaceasia minorsoft/marketplaceasia:latest
-docker push minorsoft/marketplaceasia:latest
+docker build -t minorsoft/marketplacesamai ..\MarketPlaceWeb
+docker tag minorsoft/marketplacesamai minorsoft/marketplacesamai:latest
+docker push minorsoft/marketplacesamai:latest
 ```
 
 ถ้าต้องการ pull image อย่างเดียว:
@@ -155,7 +155,7 @@ Backend เริ่มจาก `MarketPlaceWebServiceExpress\src\index.js` แ
 บน Ubuntu ให้รัน backend เป็น Docker container และ expose พอร์ตออกมาที่โฮสต์:
 
 ```powershell
-docker run -d --name marketplace-api -p 47300:47300 --env-file .env minorsoft/marketplaceasia-api:latest
+docker run -d --name marketplace-samai-api -p 47300:47300 --env-file .env minorsoft/marketplacesamai-api:latest
 ```
 
 ถ้าใช้ docker compose ให้ map พอร์ตและ volume สำหรับ data/content/media ให้ตรงกับโครงสร้างของโปรเจกต์ โดยตั้งค่า:
@@ -207,6 +207,17 @@ service นี้ expose endpoint หลักดังนี้:
 - ถ้าใช้โดเมนเดียวกันผ่าน IIS reverse proxy จะลดปัญหา CORS ลงได้มาก
 - Windows Server 2012 ค่อนข้างเก่า ถ้ามีตัวเลือก แนะนำ 2019/2022 จะดูแลง่ายกว่าและรองรับ tooling ใหม่กว่ามาก
 
+## อัปเดต content ของร้านใน persistent volume
+
+ไฟล์ใน `data/content` เป็น runtime data ที่อยู่นอก Docker image จึงต้องอัปเดตแยกจากการ pull image ก่อน deploy แบรนด์ใหม่:
+
+1. ตรวจ `MARKETPLACE_CONTENT_SCOPE` ใน `.env`
+2. แก้ title ใน `hero` และ slide หลักของ `data/content/marketplace-content.<scope>.json` เป็น `สมัยการค้า`
+3. หาก scope เป็น `database` ให้ใช้ชื่อไฟล์ที่มาจาก `DB_NAME`; หากเป็น `global` ให้แก้ `data/content/marketplace-content.json`
+4. restart `marketplace-api` หลังบันทึกไฟล์
+
+ตัวอย่าง source ของร้านนี้อยู่ที่ `MarketPlaceWebServiceExpress/data/content/marketplace-content.wawacrm.json` แล้ว และเก็บข้อมูลติดต่อเดิมไว้ตามค่า frontend env ชั่วคราว
+
 ## Volume ที่ต้อง backup
 
 - `docker-deploy\data\content`
@@ -227,27 +238,27 @@ docker compose -f .\docker-compose.yaml --env-file .\.env pull
 docker compose -f .\docker-compose.yaml --env-file .\.env up -d --force-recreate
 
 
-cd D:\FishSoft\MarketPlace-asia\docker-deploy
+cd D:\FishSoft\MarketPlace-samai\docker-deploy
 
 Copy-Item .\frontend.env ..\MarketPlaceWeb\.env.production.local -Force
-docker build -t minorsoft/marketplaceasia ..\MarketPlaceWeb
-docker tag minorsoft/marketplaceasia minorsoft/marketplaceasia:latest
-docker push minorsoft/marketplaceasia:latest
+docker build -t minorsoft/marketplacesamai ..\MarketPlaceWeb
+docker tag minorsoft/marketplacesamai minorsoft/marketplacesamai:latest
+docker push minorsoft/marketplacesamai:latest
 
 
 
 cd D:\FishSoft\MarketPlace\MarketPlaceWebServiceExpress
 
-docker build -t minorsoft/marketplaceasia-api .
-docker tag minorsoft/marketplaceasia-api minorsoft/marketplaceasia-api:latest
-docker push minorsoft/marketplaceasia-api:latest
+docker build -t minorsoft/marketplacesamai-api .
+docker tag minorsoft/marketplacesamai-api minorsoft/marketplacesamai-api:latest
+docker push minorsoft/marketplacesamai-api:latest
 
 
 
 docker compose -f .\docker-compose.yaml --env-file .\.env up -d
 
 
-cd D:\FishSoft\MarketPlace-asia\docker-deploy
+cd D:\FishSoft\MarketPlace-samai\docker-deploy
 
 # build + push ทั้งคู่
 .\scripts\publish-all.ps1
