@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sml-marketplace-app-uat
+  namespace: sml-uat
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: dealer-api-sml-uat.dohome.co.th
+    http:
+      paths:
+      - backend:
+          service:
+            name: sml-marketplace-app-uat
+            port:
+              number: 3000
+        path: /smldatacenter/
+        pathType: Prefix
+        property:
+          ingress.beta.kubernetes.io/url-match-mode: STARTS_WITH
+  tls:
+  - hosts:
+    - dealer-api-sml-uat.dohome.co.th
+    secretName: dohome-secret
+status:
+  loadBalancer:
+    ingress:
+    - ip: 10.210.103.194
+    - ip: 159.138.238.187

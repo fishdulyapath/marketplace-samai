@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sml-marketplace-app-uat
+  namespace: sml-uat
+  labels:
+    app: sml-marketplace-app-uat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sml-marketplace-app-uat
+  template:
+    metadata:
+      labels:
+        app: sml-marketplace-app-uat
+    spec:
+      containers:
+      - name: sml-marketplace-api-uat
+        image: ghcr.io/smlsoft/sml-marketplace-app:staging-ba35a54
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: web-port
+          protocol: TCP
+        resources:
+          requests:
+            memory: "512M"
+            cpu: "500m"
+          limits:
+            memory: "512M"
+            cpu: "500m"

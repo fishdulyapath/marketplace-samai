@@ -1,0 +1,253 @@
+{
+  "hero": {
+    "eyebrow": "ONLINE MARKETPLACE",
+    "title": "Develop Shop",
+    "subtitle": "เลือกสินค้า ตรวจราคา เพิ่มลงตะกร้า และส่งคำสั่งซื้อได้สะดวกผ่านหน้าร้านออนไลน์",
+    "primaryLabel": "ดูสินค้า",
+    "secondaryLabel": "ดูตะกร้า"
+  },
+  "theme": {
+    "preset": "custom",
+    "basePreset": "whiteSoftBlue",
+    "primaryColor": "#3B82F6",
+    "accentColor": "#22D3EE",
+    "headerBackground": "#FFFFFF",
+    "headerTextColor": "#1E293B",
+    "backgroundColor": "#F1F5F9",
+    "productCardBackground": "#FFFFFF",
+    "productImageBackground": "#FFFFFF",
+    "productCardBorder": "#93C5FD",
+    "footerBackground": "#F1F5F9",
+    "footerTextColor": "#1E293B"
+  },
+  "homeLayout": [
+    {
+      "type": "hero",
+      "enabled": true,
+      "settings": {
+        "width": "boxed",
+        "radius": 8,
+        "height": "normal"
+      }
+    },
+    {
+      "type": "categories",
+      "enabled": true,
+      "settings": {
+        "width": "boxed",
+        "radius": 8,
+        "maxItems": 8,
+        "density": "compact"
+      }
+    },
+    {
+      "type": "promoGrid",
+      "enabled": true,
+      "settings": {
+        "width": "boxed",
+        "radius": 8,
+        "layout": "mosaic",
+        "maxItems": 6,
+        "desktopColumns": 6,
+        "tabletColumns": 2,
+        "mobileColumns": 1,
+        "gap": 6
+      }
+    },
+    {
+      "type": "productSections",
+      "enabled": true,
+      "settings": {
+        "width": "boxed",
+        "radius": 8,
+        "display": "slider",
+        "gridColumns": 4,
+        "cardRadius": 14,
+        "imageHeight": 144
+      }
+    },
+    {
+      "type": "footer",
+      "enabled": true,
+      "settings": {
+        "width": "boxed",
+        "radius": 8
+      }
+    }
+  ],
+  "highlights": [],
+  "featuredProductCodes": [],
+  "slides": [
+    {
+      "eyebrow": "PROMOTION",
+      "title": "แคมเปญใหม่",
+      "subtitle": "รายละเอียดแคมเปญ",
+      "ctaLabel": "ดูสินค้า",
+      "href": "/marketplace",
+      "imageUrl": "http://localhost:47300/media/1777642130041-tumblr_18d1e088dead493f88ba59dd3d666032_7b128a8b-70968f74.gif",
+      "imageAlt": "",
+      "backgroundImageUrl": "http://localhost:47300/media/1777623903628-8c46c0ac-b225-4e7c-b1eb-91ca802d28e6-9ffe36d0.png",
+      "textColor": "",
+      "buttonColor": "#FF0000",
+      "buttonTextColor": "#FFFFFF",
+      "mode": "campaign",
+      "textVisible": true,
+      "heightMode": "auto",
+      "desktopHeight": 420,
+      "mobileHeight": 240,
+      "aspectRatio": "21/8",
+      "imageFit": "cover",
+      "badge": "",
+      "priceText": "",
+      "discountText": "",
+      "expiresAt": "",
+      "layout": "split",
+      "contentPosition": "left",
+      "imagePosition": "right",
+      "tone": "red",
+      "enabled": true
+    }
+  ],
+  "promoBlocks": [
+    {
+      "title": "จัดส่ง",
+      "value": "ทั่วไป",
+      "description": "พร้อมต่อยอดแจ้งเตือนรอบส่ง",
+      "href": "",
+      "tone": "blue",
+      "imageUrl": "http://localhost:47300/media/1777872574761-th-11134258-81zti-mno1e1sxt6o5a0-resize_w797_nl-6c34baa9.webp",
+      "imageAlt": "",
+      "width": "full",
+      "height": 1,
+      "heightMode": "auto",
+      "desktopHeight": 180,
+      "mobileHeight": 120,
+      "aspectRatio": "2/1",
+      "imageFit": "cover",
+      "textOverlay": false,
+      "textColor": "",
+      "enabled": true
+    },
+    {
+      "title": "",
+      "value": "",
+      "description": "",
+      "href": "",
+      "tone": "red",
+      "imageUrl": "http://localhost:47300/media/1777872968515-th-11134258-81ztq-mno6wv8hczk4f6-resize_w797_nl-e2226aa2.webp",
+      "imageAlt": "",
+      "width": 3,
+      "height": 1,
+      "heightMode": "auto",
+      "desktopHeight": 180,
+      "mobileHeight": 120,
+      "aspectRatio": "16/5",
+      "imageFit": "cover",
+      "textOverlay": false,
+      "textColor": "",
+      "enabled": true
+    },
+    {
+      "title": "โปรโมชัน",
+      "value": "ราคาพิเศษ",
+      "description": "รายละเอียดโปรโมชัน",
+      "href": "",
+      "tone": "red",
+      "imageUrl": "http://localhost:47300/media/1777872491652-th-11134258-81ztk-mji5kwy0cy6a3a-resize_w797_nl-08d2270b.webp",
+      "imageAlt": "",
+      "width": 3,
+      "height": 1,
+      "heightMode": "auto",
+      "desktopHeight": 254,
+      "mobileHeight": 120,
+      "aspectRatio": "21/8",
+      "imageFit": "cover",
+      "textOverlay": false,
+      "textColor": "",
+      "enabled": true
+    }
+  ],
+  "alertPopup": {
+    "enabled": true,
+    "name": "",
+    "imageUrl": "http://localhost:47300/media/1777872968515-th-11134258-81ztq-mno6wv8hczk4f6-resize_w797_nl-e2226aa2.webp",
+    "imageAlt": "",
+    "href": "",
+    "target": "_self",
+    "startAt": "2026-05-01T18:55",
+    "endAt": "2026-05-31T18:56",
+    "frequency": "oncePerSession",
+    "delayMs": 500,
+    "desktopWidth": 630,
+    "mobileWidth": 340,
+    "maxHeightVh": 65,
+    "borderRadius": 4,
+    "backdrop": true,
+    "closeOnBackdrop": true,
+    "showCloseButton": true,
+    "device": "all"
+  },
+  "categoryCodes": [
+    "001",
+    "002",
+    "003",
+    "004",
+    "012",
+    "013",
+    "007",
+    "015"
+  ],
+  "productSections": [
+    {
+      "id": "section-1777874667291",
+      "title": "Flash Sale",
+      "subtitle": "สินค้าราคาด่วน",
+      "mode": "manual",
+      "categoryCode": "",
+      "productCodes": [
+        "03-0458",
+        "03-0103",
+        "03-0529",
+        "03-0572",
+        "03-0573",
+        "03-0596",
+        "03-0286",
+        "03-0187"
+      ],
+      "limit": 8,
+      "display": "slider",
+      "gridColumns": 4,
+      "cardRadius": 8,
+      "imageHeight": 144,
+      "enabled": true
+    },
+    {
+      "id": "promotion",
+      "title": "สินค้าโปรโมชัน",
+      "subtitle": "รายการร่วมโปรที่พร้อมดูราคาและหน่วยขาย",
+      "mode": "promotion",
+      "categoryCode": "",
+      "productCodes": [],
+      "limit": 6,
+      "display": "grid",
+      "gridColumns": 3,
+      "cardRadius": 8,
+      "imageHeight": 250,
+      "enabled": true
+    },
+    {
+      "id": "recommended",
+      "title": "สินค้าแนะนำ",
+      "subtitle": "สินค้าน่าสนใจสำหรับเริ่มเลือกซื้อ",
+      "mode": "latest",
+      "categoryCode": "",
+      "productCodes": [],
+      "limit": 8,
+      "display": "slider",
+      "gridColumns": 4,
+      "cardRadius": 8,
+      "imageHeight": 144,
+      "enabled": true
+    }
+  ]
+}

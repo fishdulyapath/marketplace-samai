@@ -1,0 +1,8 @@
+.env
+frontend.env
+
+data/content/*
+!data/content/.gitkeep
+data/media/*
+!data/media/.gitkeep
+

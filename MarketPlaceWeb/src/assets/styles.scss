@@ -1,0 +1,185 @@
+@use '@/assets/layout/layout.scss';
+@use '@/assets/demo/demo.scss';
+@use '@/assets/shop-card.scss';
+@use 'primeicons/primeicons.css' as *;
+
+/* You can add global styles to this file, and also import other style files */
+
+:root {
+    /* ค่าเริ่มต้น Clean Green + White — ต้องตรงกับ AppLayout.vue (defaultTheme) และ Landing.vue (fallbackContent.theme)
+       ทั้ง 3 ที่เป๊ะ ไม่งั้นสีจะค้างจากหน้าที่เข้าก่อนหน้าเวลาเปลี่ยนหน้า */
+    --market-primary: #0f9f6e;
+    --market-accent: #f97316;
+    --market-header-bg: #ffffff;
+    --market-header-text: #064e3b;
+    --market-page-bg: #f7f9f8;
+    --market-card-bg: #ffffff;
+    --market-card-border: #dde8e3;
+    --market-footer-bg: #ffffff;
+    --market-footer-text: #1f2937;
+    --market-text: var(--market-footer-text);
+    --market-surface: var(--market-card-bg);
+    --market-border: var(--market-card-border);
+    --market-surface-soft: color-mix(in srgb, var(--market-page-bg) 90%, var(--market-card-border));
+    --market-primary-soft: color-mix(in srgb, var(--market-primary) 12%, var(--market-card-bg));
+    --market-accent-soft: color-mix(in srgb, var(--market-accent) 13%, var(--market-card-bg));
+    --market-muted: color-mix(in srgb, var(--market-text) 62%, var(--market-card-bg));
+    --market-shadow: color-mix(in srgb, var(--market-footer-text) 14%, transparent);
+
+    /* ── โทเคนสไตล์ร้านค้า ─────────────────────────────────────────────────
+       ทุกตัว derive จาก --market-* ด้วย var()/color-mix() เท่านั้น ห้าม hardcode สี
+       เพราะธีมจากหน้าแอดมินถูกเขียนเป็น inline style บน <html> ซึ่งชนะทุก selector
+       ทำแบบนี้แล้วแอดมินเปลี่ยนสีในหน้าตั้งค่า ทุกอย่างจะเปลี่ยนตามเองโดยไม่ต้องแก้ JS */
+
+    /* แถบหัว */
+    --shop-header-bg: var(--market-header-bg);
+    --shop-header-on: var(--market-header-text);
+    --shop-header-on-dim: color-mix(in srgb, var(--market-header-text) 72%, transparent);
+    --shop-header-divider: color-mix(in srgb, var(--market-header-text) 16%, transparent);
+
+    /* ช่องค้นหาบนแถบหัว */
+    --shop-search-bg: color-mix(in srgb, var(--market-primary) 4%, var(--market-card-bg));
+    --shop-search-on: var(--market-text);
+    --shop-search-placeholder: color-mix(in srgb, var(--market-text) 68%, var(--market-card-bg));
+
+    /* พื้นหลังและพื้นผิว */
+    --shop-page-bg: var(--market-page-bg);
+    --shop-surface: var(--market-card-bg);
+    --shop-surface-sunken: color-mix(in srgb, var(--market-page-bg) 78%, var(--market-card-border));
+    --shop-border: var(--market-card-border);
+
+    /* ราคาและป้าย */
+    --shop-price: var(--market-primary);
+    --shop-price-strike: color-mix(in srgb, var(--market-text) 48%, var(--market-card-bg));
+    --shop-badge-promo-bg: var(--market-accent);
+    --shop-badge-promo-on: #ffffff;
+    --shop-badge-new-bg: var(--market-primary);
+
+    /* เงา 3 ระดับ — มาแทน rgba(140,111,53,…) โทนน้ำตาลที่ฝังกระจายอยู่ทั่วโปรเจกต์ */
+    --shop-shadow-1: 0 1px 3px color-mix(in srgb, var(--market-text) 8%, transparent);
+    --shop-shadow-2: 0 4px 12px color-mix(in srgb, var(--market-text) 12%, transparent);
+    --shop-shadow-3: 0 10px 24px color-mix(in srgb, var(--market-text) 16%, transparent);
+
+    /* รูปทรง */
+    --shop-radius-card: 0.75rem;
+    --shop-radius-pill: 999px;
+    --shop-radius-sm: 0.5rem;
+
+    /* ความกว้างการ์ดในแถวเลื่อนแนวนอน — มาแทน 152px/132px/240px ที่ hardcode ไว้คนละที่ */
+    --shop-rail-card-w: clamp(8.5rem, 30vw, 11rem);
+
+    /* ── ความสูงของแถบตรึงด้านบน — แหล่งความจริงเดียวของทั้งแอป ──────────────
+       ก่อนหน้านี้ค่านี้ถูกเขียนซ้ำเป็นตัวเลขดิบ 5 ที่ (_topbar.scss, AppTopbar padding-top
+       2 ค่า, ProductList sticky-top 3 ค่า) และไม่ตรงกัน ทำให้แถบค้นหาลอยทับใต้เมนู
+       ทั้งที่จอ 860px (ทับ 3.6px) และเดสก์ท็อป 1440px (ทับ 2.1px)
+
+       ⚠️ ถ้าแก้ค่าพวกนี้ ต้องแก้ min-height ของ nav ใน AppTopbar.vue ให้ตรงกันด้วย
+          ไม่งั้นจะกลับไปเพี้ยนแบบเดิม */
+    --app-topbar-h: 4rem;
+    --app-subnav-h: 3.25rem;
+    --app-bottomnav-h: 0rem;
+    --app-header-total-h: calc(var(--app-topbar-h) + var(--app-subnav-h));
+    --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ต่ำกว่า lg (992px) เมนูย้ายจากแถวสองด้านบน → แถบล่าง
+   ดังนั้นด้านบนเหลือแค่ topbar (subnav = 0) และต้องเว้นที่ด้านล่างให้แถบเมนูแทน
+   ค่านี้ต้องตรงกับ media query ใน AppTopbar.vue ที่สลับ nav เสมอ */
+@media (max-width: 991.98px) {
+    :root {
+        --app-subnav-h: 0rem;
+        /* 4.3rem = ความสูงจริงของปุ่ม (ไอคอน + ข้อความ + padding) ที่วัดจากเบราว์เซอร์
+           ถ้าตั้งน้อยกว่านี้ แถบจะสูงเกินตัวแปร แล้วปุ่มลอยที่คำนวณจากตัวแปรจะโดนทับ */
+        --app-bottomnav-h: 4.3rem;
+    }
+}
+
+body {
+    background: linear-gradient(180deg, var(--market-card-bg) 0%, var(--market-page-bg) 100%);
+    color: var(--market-text);
+}
+
+.layout-main-container {
+    background: linear-gradient(180deg, var(--market-card-bg) 0%, var(--market-page-bg) 100%);
+}
+
+.p-card,
+.p-dialog,
+.p-popover,
+.p-overlaypanel,
+.p-menu,
+.p-tieredmenu,
+.p-contextmenu,
+.p-drawer,
+.p-panel,
+.p-datatable,
+.p-tabs,
+.p-tabview,
+.p-tabview-panels,
+.p-accordionpanel {
+    background: var(--market-card-bg);
+    border-color: var(--market-card-border);
+    color: var(--market-text);
+}
+
+.p-dialog-header,
+.p-dialog-content,
+.p-dialog-footer,
+.p-overlaypanel-content,
+.p-menu-list,
+.p-datatable-header,
+.p-datatable-thead > tr > th,
+.p-datatable-tbody > tr {
+    background: var(--market-card-bg);
+    border-color: var(--market-card-border);
+    color: var(--market-text);
+}
+
+.p-inputtext,
+.p-textarea,
+.p-select,
+.p-dropdown,
+.p-multiselect,
+.p-autocomplete-input,
+.p-inputnumber-input,
+.p-datepicker,
+.p-select-overlay,
+.p-dropdown-panel,
+.p-multiselect-overlay,
+.p-autocomplete-overlay {
+    background: var(--market-card-bg);
+    border-color: var(--market-card-border);
+    color: var(--market-text);
+}
+
+.p-select-option.p-focus,
+.p-select-option:hover,
+.p-dropdown-item.p-highlight,
+.p-dropdown-item:hover,
+.p-multiselect-option.p-focus,
+.p-multiselect-option:hover,
+.p-menuitem-content:hover,
+.p-tab-active,
+.p-tab:hover {
+    background: var(--market-primary-soft);
+    color: var(--market-text);
+}
+
+.p-button:not(.p-button-text):not(.p-button-outlined):not(.p-button-danger):not(.p-button-secondary):not(.p-button-success):not(.p-button-info):not(.p-button-warning):not(.p-button-help):not(.p-button-contrast) {
+    background: linear-gradient(120deg, var(--market-primary) 0%, color-mix(in srgb, var(--market-primary) 72%, var(--market-accent)) 100%);
+    border-color: var(--market-primary);
+}
+
+.p-button.p-button-outlined {
+    color: var(--market-primary);
+    border-color: var(--market-primary);
+}
+
+.p-button.p-button-text {
+    color: var(--market-primary);
+}
+
+.p-badge,
+.p-tag:not([data-p]):not(.p-tag-danger):not(.p-tag-success):not(.p-tag-warning):not(.p-tag-info) {
+    background: var(--market-accent);
+}

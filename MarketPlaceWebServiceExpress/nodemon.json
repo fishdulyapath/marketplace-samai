@@ -1,0 +1,10 @@
+{
+  "watch": ["src", "docs/api"],
+  "ext": "js,json,yaml,yml",
+  "ignore": [
+    "data/**",
+    "*.log",
+    "node_modules/**",
+    "scripts/**"
+  ]
+}

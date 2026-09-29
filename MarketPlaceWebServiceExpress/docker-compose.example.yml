@@ -1,0 +1,23 @@
+services:
+  marketplace-api:
+    build:
+      context: .
+    container_name: marketplace-api
+    env_file:
+      - .env
+    environment:
+      PORT: "47300"
+      MARKETPLACE_DATA_DIR: /app/data
+      MARKETPLACE_CONTENT_DIR: /app/data/content
+      MARKETPLACE_MEDIA_DIR: /app/data/media
+      MARKETPLACE_SITE_NAME: MarketPlace
+    ports:
+      - "47300:47300"
+    volumes:
+      - marketplace_content:/app/data/content
+      - marketplace_media:/app/data/media
+    restart: unless-stopped
+
+volumes:
+  marketplace_content:
+  marketplace_media:

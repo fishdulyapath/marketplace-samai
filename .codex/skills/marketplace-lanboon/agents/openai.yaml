@@ -1,0 +1,4 @@
+interface:
+  display_name: "MarketPlace Lanboon"
+  short_description: "Work on this marketplace repo"
+  default_prompt: "Use $marketplace-lanboon to work safely in the MarketPlace Lanboon frontend and Express backend."

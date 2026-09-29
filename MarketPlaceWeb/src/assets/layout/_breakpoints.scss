@@ -1,0 +1,36 @@
+// จุดตัดขนาดจอชุดเดียวของทั้งแอป — ต้องตรงกับ tailwind.config.js และ composables/useBreakpoints.js
+// ห้ามแก้ค่าที่มีอยู่ เพราะ utility class ของ Tailwind ใช้ค่าเดียวกันทั่วโปรเจกต์
+$bp-xs: 420px;
+$bp-sm: 576px;
+$bp-md: 768px;
+$bp-lg: 992px;
+$bp-xl: 1200px;
+$bp-2xl: 1920px;
+
+$breakpoints: (
+    'xs': $bp-xs,
+    'sm': $bp-sm,
+    'md': $bp-md,
+    'lg': $bp-lg,
+    'xl': $bp-xl,
+    '2xl': $bp-2xl,
+);
+
+// ใช้ -0.02px เสมอ กันช่องโหว่ 1px ที่ขอบ (จอ 991.5px ต้องเข้าเงื่อนไข down(lg))
+@mixin down($name) {
+    @if not map-has-key($breakpoints, $name) {
+        @error 'unknown breakpoint: #{$name}';
+    }
+    @media (max-width: #{map-get($breakpoints, $name) - 0.02}) {
+        @content;
+    }
+}
+
+@mixin up($name) {
+    @if not map-has-key($breakpoints, $name) {
+        @error 'unknown breakpoint: #{$name}';
+    }
+    @media (min-width: #{map-get($breakpoints, $name)}) {
+        @content;
+    }
+}

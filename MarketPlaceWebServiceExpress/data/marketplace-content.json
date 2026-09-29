@@ -1,0 +1,116 @@
+{
+  "hero": {
+    "eyebrow": "ONLINE MARKETPLACE",
+    "title": "MarketPlace",
+    "subtitle": "เลือกสินค้า ตรวจราคา เพิ่มลงตะกร้า และสั่งซื้อสินค้าได้สะดวกผ่านหน้าร้านออนไลน์",
+    "primaryLabel": "ดูสินค้า",
+    "secondaryLabel": "ดูตะกร้า"
+  },
+  "highlights": [],
+  "featuredProductCodes": [],
+  "slides": [
+    {
+      "eyebrow": "ONLINE MARKETPLACE",
+      "title": "MarketPlace",
+      "subtitle": "เลือกสินค้า ตรวจราคา เพิ่มลงตะกร้า และสั่งซื้อสินค้าได้สะดวกผ่านหน้าร้านออนไลน์",
+      "ctaLabel": "ดูสินค้า",
+      "href": "/marketplace",
+      "imageUrl": "/assets/shop-preview.png",
+      "imageAlt": "",
+      "tone": "teal",
+      "enabled": true,
+      "badge": "โปรพิเศษ",
+      "discountText": "เลือกได้จากหน้าร้าน",
+      "priceText": "",
+      "expiresAt": "",
+      "layout": "split",
+      "contentPosition": "left",
+      "imagePosition": "right"
+    },
+    {
+      "eyebrow": "PROMOTION",
+      "title": "ลดแรงสินค้าโปร",
+      "subtitle": "รวมสินค้าร่วมโปรไว้ในบล็อกเดียว คลิกดูราคาและหน่วยขายได้ทันที",
+      "ctaLabel": "ช้อปเลย",
+      "href": "/marketplace?promo=1",
+      "imageUrl": "/assets/store-hero.jpg",
+      "imageAlt": "",
+      "tone": "red",
+      "enabled": true,
+      "badge": "โปรพิเศษ",
+      "discountText": "เลือกได้จากหน้าร้าน",
+      "priceText": "",
+      "expiresAt": "",
+      "layout": "split",
+      "contentPosition": "left",
+      "imagePosition": "right"
+    },
+    {
+      "eyebrow": "FAST ORDER",
+      "title": "ค้นหา เลือก สั่งซื้อ",
+      "subtitle": "หน้าร้านเน้นใช้งานจริง ดูราคา หน่วยขาย และเข้าตะกร้าได้ทันที",
+      "ctaLabel": "ช้อปเลย",
+      "href": "/marketplace",
+      "imageUrl": "/assets/shop-preview.png",
+      "imageAlt": "",
+      "tone": "blue",
+      "enabled": true,
+      "badge": "โปรพิเศษ",
+      "discountText": "เลือกได้จากหน้าร้าน",
+      "priceText": "",
+      "expiresAt": "",
+      "layout": "split",
+      "contentPosition": "left",
+      "imagePosition": "right"
+    }
+  ],
+  "promoBlocks": [
+    {
+      "title": "ซื้อครบ 5,000",
+      "value": "ลด 100",
+      "description": "สิทธิพิเศษสำหรับยอดซื้อถึงเกณฑ์",
+      "href": "/marketplace?promo=1",
+      "tone": "red",
+      "enabled": true
+    },
+    {
+      "title": "โปรโมชันราคา",
+      "value": "ราคาดี",
+      "description": "รวมสินค้าร่วมโปรไว้ให้เลือกง่าย",
+      "href": "/marketplace?promo=1",
+      "tone": "teal",
+      "enabled": true
+    },
+    {
+      "title": "จัดส่ง",
+      "value": "ทั่วไป",
+      "description": "พร้อมต่อยอดแจ้งเตือนรอบส่ง",
+      "href": "/checkout",
+      "tone": "blue",
+      "enabled": true
+    }
+  ],
+  "categoryCodes": [],
+  "productSections": [
+    {
+      "id": "promotion",
+      "title": "สินค้าโปรโมชัน",
+      "subtitle": "รายการร่วมโปรที่พร้อมดูราคาและหน่วยขาย",
+      "mode": "promotion",
+      "categoryCode": "",
+      "productCodes": [],
+      "limit": 8,
+      "enabled": true
+    },
+    {
+      "id": "recommended",
+      "title": "สินค้าแนะนำ",
+      "subtitle": "สินค้าน่าสนใจสำหรับเริ่มเลือกซื้อ",
+      "mode": "latest",
+      "categoryCode": "",
+      "productCodes": [],
+      "limit": 8,
+      "enabled": true
+    }
+  ]
+}

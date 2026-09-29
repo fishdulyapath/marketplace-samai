@@ -1,0 +1,122 @@
+// ── สไตล์การ์ดสินค้าร่วม ─────────────────────────────────────────────────
+//
+// โปรเจกต์นี้มี markup การ์ดสินค้าซ้ำกัน 6 ชุด (กริดแคตตาล็อก, สินค้าแนะนำ, โปรโมชัน,
+// ของแถม, สินค้าเกี่ยวข้องในหน้ารายละเอียด, การ์ดบนหน้าแรก) ที่เคยมีสไตล์ของใครของมัน
+// ทำให้หน้าตาไม่ตรงกันและแก้ทีต้องไล่ 6 ที่
+//
+// ไฟล์นี้เป็น "ชั้นสไตล์ร่วม" — แต่ละที่แค่ใส่ class เพิ่มโดยไม่ต้องย้าย DOM
+// (การรวมเป็น component เดียวเป็นงานรอบถัดไป ทำแยกเพื่อให้ diff อ่านง่ายและ revert ได้)
+//
+// ⚠️ ห้าม hardcode สี — ใช้โทเคน --shop-* / --market-* เท่านั้น
+//    ไม่งั้นเปลี่ยนธีมในหน้าแอดมินแล้วการ์ดจะไม่เปลี่ยนตาม
+
+.shop-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--shop-border);
+    border-radius: var(--shop-radius-card);
+    background: var(--shop-surface);
+    box-shadow: var(--shop-shadow-1);
+    overflow: hidden;
+    transition:
+        transform 0.18s ease,
+        box-shadow 0.18s ease;
+}
+
+.shop-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shop-shadow-2);
+}
+
+// กล่องรูป: aspect-ratio ล็อกสัดส่วนไว้ตั้งแต่ก่อนรูปโหลดเสร็จ กัน layout กระโดด (CLS)
+// position: relative เพื่อให้ป้ายมุมและปุ่มหัวใจวางทับได้
+.shop-card-media {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    background: var(--market-product-image-bg, var(--shop-surface));
+    overflow: hidden;
+}
+
+.shop-card-media img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+// ป้ายสถานะมุมบนซ้าย (โปรโมชัน / พรีออเดอร์ / สินค้าหมด)
+.shop-card-badges {
+    position: absolute;
+    top: 0.4rem;
+    left: 0.4rem;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    max-width: calc(100% - 0.8rem);
+    pointer-events: none;
+}
+
+.shop-card-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.6rem 0.65rem 0.7rem;
+}
+
+// ชื่อสินค้า 2 บรรทัดพร้อม min-height เพื่อล็อกความสูงการ์ดให้เท่ากันทั้งแถว
+// (ของเดิมใช้ line-clamp เฉยๆ ชื่อสั้น 1 บรรทัดจะทำให้การ์ดเตี้ยกว่าเพื่อน)
+.shop-card-name {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    min-height: 2.8em;
+    margin: 0 0 0.35rem;
+    color: var(--market-text);
+    font-size: clamp(0.82rem, 1.8vw, 0.97rem);
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+// ราคาเป็นข้อมูลที่ลูกค้ามองหาก่อนเสมอ จึงตัวใหญ่และหนาที่สุดในการ์ด
+.shop-card-price {
+    color: var(--shop-price);
+    font-size: clamp(1rem, 2.6vw, 1.35rem);
+    font-weight: 900;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+}
+
+.shop-card-unit {
+    color: var(--market-muted);
+    font-size: 0.76rem;
+    font-weight: 500;
+}
+
+.shop-card-price-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: auto;
+    min-height: 1.7rem;
+}
+
+// การ์ดในแถวเลื่อนแนวนอน — ความกว้างมาจากโทเคนเดียว
+// แทนที่ 152px / 132px / 240px ที่เคย hardcode ไว้คนละไฟล์ (ตัว 240px ล้นจอ 360px)
+.shop-card--rail {
+    flex: 0 0 var(--shop-rail-card-w);
+    width: var(--shop-rail-card-w);
+    max-width: var(--shop-rail-card-w);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .shop-card,
+    .shop-card:hover {
+        transition: none;
+        transform: none;
+    }
+}

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "marketplace-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "MarketPlaceWeb"],
+      "port": 8080
+    },
+    {
+      "name": "marketplace-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "MarketPlaceWebServiceExpress"],
+      "port": 47300
+    }
+  ]
+}
