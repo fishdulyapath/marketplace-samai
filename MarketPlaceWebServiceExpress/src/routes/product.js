@@ -7,6 +7,7 @@ const { query, pool, poolImages, withTransaction, queryImages } = require("../db
 const { getProductPriceLocalx } = require("../utils/priceHelper");
 const { pickProvidedFields, buildSetClause, buildConflictSetClause, hasOwn } = require("../utils/partialUpdate");
 const { checkErpCodes } = require("../utils/erpCodeGuard");
+const { groupedStockCtes } = require("../utils/groupedStock");
 const { escapeLike, likeContains } = require("../utils/likePattern");
 const { cleanFeatureType, ensureSalesSettingsTables, getMarketplaceDisplayDefaults, getPreorderDefaultEnabled, getStockDisplayPercent, normalizePreorderMode, resolvePreorderAllowed } = require("../utils/marketplaceSalesSettings");
 const { normalizeMaxAllowance, parseMaxAllowance } = require("../utils/maxAllowance");
@@ -920,9 +921,8 @@ router.get("/getProductList", async (req, res) => {
 
     // stockQtyExpr เหมือน Java
     const stockQtyExpr =
-      `((select balance_qty from ic_inventory where code=b.code) / ` +
-      `NULLIF( ((select unit_standard_stand_value from ic_inventory where code=b.code) / ` +
-      `NULLIF((select unit_standard_divide_value from ic_inventory where code=b.code),0) ), 0))`;
+      `(COALESCE(gs.balance_qty,0) / ` +
+      `NULLIF(b.unit_standard_stand_value / NULLIF(b.unit_standard_divide_value,0),0))`;
     const displayStockQtyExpr = `TRUNC(COALESCE((${stockQtyExpr}),0) * ${stockDisplayPercent} / 100, 0)`;
     const orderableStockQtyExpr = `(CASE WHEN COALESCE(b.item_type,0)=3 THEN COALESCE(ss.balance_qty,0) ELSE ${displayStockQtyExpr} END)`;
 
@@ -936,6 +936,7 @@ router.get("/getProductList", async (req, res) => {
     const baseFrom =
       ` FROM ic_inventory b` +
       ` LEFT JOIN ic_inventory_detail c ON b.code=c.ic_code` +
+      ` LEFT JOIN normal_stock gs ON gs.ic_code=b.code` +
       ` LEFT JOIN ic_group g ON g.code=b.group_main` +
       ` LEFT JOIN marketplace_featured_product mfp ON mfp.item_code=b.code` +
       `   AND mfp.feature_type='${safeFeatureType}'` +
@@ -974,6 +975,7 @@ router.get("/getProductList", async (req, res) => {
       ` WHERE 1=1 ${patternWhere} ${whereFinal}`;
 
     const dataSQL =
+      `WITH ${groupedStockCtes("SELECT code AS item_code, ''::text AS wh_code FROM ic_inventory WHERE COALESCE(item_type,0)<>3" + (includeAllPattern ? "" : " AND item_pattern='[W]'"))} ` +
       `SELECT b.code AS item_code, COALESCE(b.name_1,'') AS name_1, COALESCE(b.name_2,'') AS name_2,` +
       ` COALESCE(b.name_eng_1,'') AS name_eng_1, COALESCE(b.name_eng_2,'') AS name_eng_2,` +
       ` COALESCE(c.dimension_32,'') AS dimension_32, COALESCE(c.dimension_35,'') AS dimension_35,` +
@@ -985,6 +987,7 @@ router.get("/getProductList", async (req, res) => {
       `     AND ib.unit_code = COALESCE(NULLIF(online_unit.code,''), NULLIF(c.start_sale_unit,''), NULLIF(b.unit_standard,''), NULLIF(b.unit_cost,''), '')` +
       `   ORDER BY ib.barcode LIMIT 1),'') AS barcode,` +
       ` (CASE WHEN ${orderableStockQtyExpr} <= 0 THEN '1' ELSE '0' END) AS sold_out,` +
+      ` ${orderableStockQtyExpr} AS balance_qty,` +
       ` CASE WHEN COALESCE(b.item_grade,'') = 'R' THEN '1' ELSE '0' END AS is_return,` +
       ` CASE WHEN ${activePromotionCondition} THEN '1' ELSE '0' END AS is_promotion,` +
       ` COALESCE(arc.status,0) AS favorite_item` +
@@ -1011,6 +1014,7 @@ router.get("/getProductList", async (req, res) => {
         preorder_only_available: product.preorder_only_available,
         item_type: product.item_type,
         sold_out: product.sold_out,
+        balance_qty: r.balance_qty,
         unit_code: product.online_sale_unit || product.unit_code || "",
         online_sale_unit: product.online_sale_unit || product.unit_code || "",
         unit_standard: product.unit_standard,
@@ -1069,13 +1073,7 @@ router.get("/getProductDetail", async (req, res) => {
           COALESCE((SELECT NULLIF(start_sale_wh,'') FROM ic_inventory_detail WHERE ic_code='${strItemCode.replace(/'/g, "''")}' LIMIT 1), '${safeWhCode}') AS stock_wh,
           COALESCE((SELECT NULLIF(start_sale_shelf,'') FROM ic_inventory_detail WHERE ic_code='${strItemCode.replace(/'/g, "''")}' LIMIT 1), '${safeShelfCode}') AS stock_shelf
       ),
-      balance_stock AS (
-        SELECT s.ic_code, SUM(s.balance_qty) AS sum_balance_qty
-        FROM product_setting ps
-        CROSS JOIN LATERAL sml_ic_function_stock_balance_warehouse_location(current_date,'${strItemCode.replace(/'/g, "''")}', ps.stock_wh, '') s
-        WHERE balance_qty > 0
-        GROUP BY s.ic_code
-      )
+      ${groupedStockCtes(`SELECT '${strItemCode.replace(/'/g, "''")}'::text AS item_code, stock_wh AS wh_code FROM product_setting`, 'balance_stock')}
       SELECT a.ic_code, COALESCE(b.name_1,'') AS name_1, COALESCE(b.name_2,'') AS name_2,
         COALESCE(b.name_eng_1,'') AS name_eng_1, COALESCE(b.name_eng_2,'') AS name_eng_2,
         COALESCE(c.dimension_31,'') AS dimension_31, COALESCE(c.dimension_32,'') AS dimension_32,
@@ -1090,9 +1088,9 @@ router.get("/getProductDetail", async (req, res) => {
         0 AS barcode_online_visibility,
         CASE WHEN COALESCE(b.item_grade,'') = upper('r') THEN '1' ELSE '0' END AS is_return,
         COALESCE(b.description,'') AS description,
-        TRUNC(COALESCE((SELECT sum_balance_qty FROM balance_stock g WHERE g.ic_code=a.ic_code LIMIT 1),0) * ${stockDisplayPercent} / 100, 0) AS sum_balance_qty,
-        TRUNC((COALESCE((SELECT sum_balance_qty FROM balance_stock g WHERE g.ic_code=a.ic_code LIMIT 1),0) * ${stockDisplayPercent} / 100)/COALESCE(NULLIF(a.ratio,0),1),0) AS balance_qty,
-        (CASE WHEN TRUNC(COALESCE((SELECT sum_balance_qty FROM balance_stock g WHERE g.ic_code=a.ic_code LIMIT 1),0) * ${stockDisplayPercent} / 100, 0) <= ROUND(COALESCE(c.minimum_qty,0)) THEN '1' ELSE '0' END) AS sold_out,
+        TRUNC(COALESCE((SELECT balance_qty FROM balance_stock g WHERE g.ic_code=a.ic_code LIMIT 1),0) * ${stockDisplayPercent} / 100, 0) AS sum_balance_qty,
+        TRUNC((COALESCE((SELECT balance_qty FROM balance_stock g WHERE g.ic_code=a.ic_code LIMIT 1),0) * ${stockDisplayPercent} / 100)/COALESCE(NULLIF(a.ratio,0),1),0) AS balance_qty,
+        (CASE WHEN TRUNC(COALESCE((SELECT balance_qty FROM balance_stock g WHERE g.ic_code=a.ic_code LIMIT 1),0) * ${stockDisplayPercent} / 100, 0) <= ROUND(COALESCE(c.minimum_qty,0)) THEN '1' ELSE '0' END) AS sold_out,
         COALESCE(((SELECT SUM(qty) FROM ic_trans_detail e WHERE a.ic_code=e.item_code AND a.code=e.unit_code AND e.doc_date BETWEEN '2025-01-01' AND 'NOW()' LIMIT 1)
           *(SELECT stand_value FROM ic_trans_detail e WHERE a.ic_code=e.item_code AND a.code=e.unit_code LIMIT 1)),0) AS sum_sale,
         COALESCE((SELECT status FROM ar_item_by_customer WHERE ic_code=b.code AND ar_code='${strCustCode.replace(/'/g, "''")}' LIMIT 1),0) AS favorite_item,

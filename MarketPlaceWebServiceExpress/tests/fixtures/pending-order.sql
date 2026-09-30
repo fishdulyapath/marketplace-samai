@@ -1,7 +1,7 @@
 -- Minimal ERP contract in a disposable local database, never a live ERP schema.
 CREATE TABLE ar_customer (code text PRIMARY KEY, name_1 text, telephone text);
 CREATE TABLE ar_contactor (ar_code text, roworder integer, name text, telephone text);
-CREATE TABLE ic_inventory (code text PRIMARY KEY, name_1 text, name_2 text, name_eng_1 text, item_type integer DEFAULT 0, item_pattern text DEFAULT '[W]', tax_type integer DEFAULT 0);
+CREATE TABLE ic_inventory (code text PRIMARY KEY, name_1 text, name_2 text, name_eng_1 text, name_eng_2 text, item_type integer DEFAULT 0, item_pattern text DEFAULT '[W]', tax_type integer DEFAULT 0);
 CREATE TABLE ic_inventory_detail (ic_code text PRIMARY KEY, dimension_35 text, dimension_38 text, start_sale_wh text, start_sale_shelf text);
 CREATE TABLE ic_inventory_set_detail (ic_set_code text, ic_code text, unit_code text, qty numeric, price numeric, sum_amount numeric, barcode text, price_ratio numeric, line_number integer, roworder integer);
 CREATE TABLE ic_unit_use (ic_code text, code text, stand_value numeric DEFAULT 1, divide_value numeric DEFAULT 1, ratio numeric DEFAULT 1);
@@ -41,3 +41,6 @@ INSERT INTO ic_inventory_set_detail VALUES ('SET1','P1','EA',1,100,100,'',1,1,1)
 INSERT INTO sml_sale_premium(premium_code,name_1) VALUES ('PROMO','โปรโมชัน');
 INSERT INTO sml_sale_premium_condition VALUES ('PROMO','P1','EA',1,1,1,1);
 INSERT INTO sml_sale_premium_free_list VALUES ('PROMO','FREE1','EA',1,1,1,1);
+CREATE TABLE test_physical (ic_code text,ic_warehouse text,ic_shelf text,ic_unit_code text,balance_qty numeric);
+CREATE FUNCTION sml_ic_function_stock_balance_warehouse_location(date,text,text,text)
+RETURNS SETOF test_physical LANGUAGE SQL AS $$ SELECT * FROM test_physical WHERE ic_code=ANY(string_to_array($2,',')) AND ($3='' OR ic_warehouse=$3) AND ($4='' OR ic_shelf=$4) $$;

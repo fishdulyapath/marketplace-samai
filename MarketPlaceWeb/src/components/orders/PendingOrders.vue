@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue';
 import PendingOrderService from '@/services/PendingOrderService';
 import InventoryService from '@/services/InventoryService';
+import AllocationEditor from './AllocationEditor.vue';
+import { allocationError, allocationPayload } from '@/utils/orderAllocations';
 
 const props = defineProps({ admin: Boolean, custCode: { type: String, default: '' } });
 const emit = defineEmits(['changed']);
@@ -22,11 +24,14 @@ const reason = ref('');
 const warehouses = ref([]);
 const shelves = ref({});
 const shelfLoading = ref({});
+const allocationSource = ref(null);
+const allocationVisible = ref(false);
 let listVersion = 0;
 const money = value => Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const labels = { pending: 'รอพนักงานยืนยัน', cancelled: 'ลูกค้ายกเลิก', rejected: 'พนักงานปฏิเสธ', confirmed: 'ยืนยันแล้ว' };
 const canConfirm = computed(() => selected.value?.status === 'pending' && selected.value?.items?.length > 0 && selected.value.items.every(item =>
-    item.wh_code && item.shelf_code && !shelfLoading.value[item.wh_code] && (shelves.value[item.wh_code] || []).some(shelf => shelf.code === item.shelf_code)));
+    item.allocations ? !allocationError(item, item.allocations) :
+        item.wh_code && item.shelf_code && !shelfLoading.value[item.wh_code] && (shelves.value[item.wh_code] || []).some(shelf => shelf.code === item.shelf_code)));
 const actionText = computed(() => ({ confirm: 'ยืนยันสั่งซื้อ', reject: 'ปฏิเสธคำขอ', cancel: 'ยกเลิกคำขอ' }[confirmAction.value] || 'ยืนยัน'));
 const messageOf = err => err?.response?.data?.message || err.message || 'ดำเนินการไม่สำเร็จ';
 
@@ -86,7 +91,7 @@ async function act() {
     try {
         const doc = selected.value.doc_no;
         if (confirmAction.value === 'confirm') {
-            const result = await PendingOrderService.confirm(doc, selected.value.items.map(({ line_number, wh_code, shelf_code }) => ({ line_number, wh_code, shelf_code })));
+            const result = await PendingOrderService.confirm(doc, allocationPayload(selected.value.items));
             notice.value = `ยืนยันแล้ว เลขที่คำสั่งซื้อ ${result.doc_no}`;
         } else if (confirmAction.value === 'reject') {
             await PendingOrderService.reject(doc, reason.value.trim());
@@ -145,10 +150,14 @@ defineExpose({ reload: load });
                         <td><strong>{{ item.item_code }}</strong><div>{{ item.item_name }}</div><small v-if="Number(item.is_permium)">ของแถม</small><ul v-if="item.sub_item?.length"><li v-for="sub in item.sub_item" :key="sub.line_number">{{ sub.item_name }} × {{ sub.qty }} {{ sub.unit_code }}</li></ul></td>
                         <td>{{ item.qty }} {{ item.unit_code }}</td><td>{{ money(item.price) }}</td><td>{{ money(item.sum_amount) }}</td>
                         <td v-if="admin" class="pending-location">
+                            <Button v-if="Number(item.item_type) !== 3" label="เปลี่ยน/แบ่งสินค้า" icon="pi pi-arrows-h" text :disabled="busy || selected.status !== 'pending'" @click="allocationSource = item; allocationVisible = true" />
+                            <ul v-if="item.allocations"><li v-for="(allocation, index) in item.allocations" :key="index"><strong>{{ allocation.item_code }}</strong> × {{ allocation.qty }} {{ item.unit_code }}<br />{{ allocation.wh_code }} / {{ allocation.shelf_code }}</li></ul>
+                            <template v-else>
                             <label :for="`wh-${item.line_number}`">คลัง</label><Select :inputId="`wh-${item.line_number}`" :ariaLabel="`คลัง ${item.item_code}`" v-model="item.wh_code" :options="warehouses" optionLabel="label" optionValue="code" filter placeholder="เลือกคลัง" :disabled="busy || selected.status !== 'pending'" @change="selectWarehouse(item)" />
                             <label :for="`shelf-${item.line_number}`">ที่เก็บ</label><Select :inputId="`shelf-${item.line_number}`" :ariaLabel="`ที่เก็บ ${item.item_code}`" v-model="item.shelf_code" :options="shelves[item.wh_code] || []" optionLabel="label" optionValue="code" filter placeholder="เลือกที่เก็บ" :loading="shelfLoading[item.wh_code]" :disabled="!item.wh_code || busy || selected.status !== 'pending'" />
                             <Button v-if="item.wh_code && !shelves[item.wh_code] && !shelfLoading[item.wh_code]" label="โหลดที่เก็บอีกครั้ง" text @click="selectWarehouse(item)" />
                             <small v-if="item.wh_code && shelves[item.wh_code]?.length === 0">คลังนี้ยังไม่มีที่เก็บใน master</small>
+                            </template>
                         </td>
                     </tr>
                 </tbody></table></div>
@@ -165,10 +174,11 @@ defineExpose({ reload: load });
         </Dialog>
         <Dialog :visible="!!confirmAction" modal :header="actionText" :style="{ width: 'min(540px, 95vw)' }" :closable="!busy" :closeOnEscape="!busy" @update:visible="value => { if (!value && !busy) confirmAction = ''; }">
             <p>{{ actionText }} {{ selected?.doc_no }} ใช่หรือไม่?</p>
-            <template v-if="confirmAction === 'confirm'"><p>ยอดรวม ฿{{ money(selected?.total_amount) }}</p><ul><li v-for="item in selected?.items" :key="item.line_number">{{ item.item_name }}: {{ item.wh_code }} / {{ item.shelf_code }}</li></ul></template>
+            <template v-if="confirmAction === 'confirm'"><p>ยอดรวม ฿{{ money(selected?.total_amount) }}</p><ul><li v-for="item in selected?.items" :key="item.line_number">{{ item.item_code }} — {{ item.item_name }}<ul><li v-for="(allocation, index) in (item.allocations || [{ item_code: item.item_code, qty: item.qty, wh_code: item.wh_code, shelf_code: item.shelf_code }])" :key="index">→ {{ allocation.item_code }} × {{ allocation.qty }} {{ item.unit_code }} · {{ allocation.wh_code }} / {{ allocation.shelf_code }}</li></ul></li></ul></template>
             <label v-if="confirmAction === 'reject'" class="pending-reason">เหตุผลที่แจ้งลูกค้า<Textarea v-model="reason" rows="4" maxlength="1000" autofocus /></label>
             <template #footer><Button label="กลับ" outlined :disabled="busy" @click="confirmAction = ''" /><Button :label="actionText" :loading="busy" :disabled="busy || (confirmAction === 'reject' && !reason.trim())" @click="act" /></template>
         </Dialog>
+        <AllocationEditor v-model:visible="allocationVisible" :source="allocationSource" :doc-no="selected?.doc_no" :warehouses="warehouses" @apply="allocations => { allocationSource.allocations = allocations; }" />
     </section>
 </template>
 

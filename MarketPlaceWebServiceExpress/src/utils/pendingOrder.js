@@ -1,4 +1,5 @@
-const { checkErpCodes } = require('./erpCodeGuard');
+const { normalizeAllocations, allocateLines } = require('./pendingAllocations');
+const { validatePendingStock } = require('./pendingStock');
 const { splitItemsIntoDocuments } = require('./orderDocSplit');
 const { resolveMainDocNo, formatSubDocNo } = require('./orderDocNo');
 const { getOrderDocPattern, getErpMaxLinesPerDoc } = require('./marketplaceSalesSettings');
@@ -27,21 +28,7 @@ function rootLines(rows, metadata = {}) {
   }));
 }
 
-function validateAllocations(items, allocations) {
-  if (!Array.isArray(allocations) || allocations.length !== items.length) throw fail('กรุณาเลือกคลังและที่เก็บให้ครบทุกสินค้า', 400);
-  const result = new Map();
-  const allowed = new Set(items.map(item => Number(item.line_number)));
-  for (const allocation of allocations) {
-    const line = Number(allocation?.line_number);
-    const wh_code = String(allocation?.wh_code || '').trim();
-    const shelf_code = String(allocation?.shelf_code || '').trim();
-    if (!allowed.has(line) || result.has(line) || !wh_code || !shelf_code) throw fail('รายการคลังและที่เก็บไม่ครบหรือซ้ำ', 400);
-    const error = checkErpCodes({ wh_code, shelf_code });
-    if (error) throw fail(error, 400);
-    result.set(line, { wh_code, shelf_code });
-  }
-  return result;
-}
+const validateAllocations = normalizeAllocations;
 
 async function lockRequest(client, docNo) {
   const result = await client.query('SELECT * FROM marketplace_pending_order WHERE doc_no=$1 FOR UPDATE', [docNo]);
@@ -123,15 +110,12 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
   if (Number(header.last_status || 0) !== 0) throw fail('คำขอนี้ปิดงานแล้ว');
   const roots = rootLines(rows, pending.metadata);
   const selected = validateAllocations(roots, allocations);
-  for (const { wh_code, shelf_code } of selected.values()) {
-    const valid = await client.query(
-      `SELECT 1 FROM ic_warehouse w JOIN ic_shelf s ON s.whcode=w.code WHERE w.code=$1 AND s.code=$2 LIMIT 1`, [wh_code, shelf_code]);
-    if (!valid.rows.length) throw fail(`ไม่พบคลัง/ที่เก็บ ${wh_code} / ${shelf_code} ใน master`, 400);
-  }
+  const allocated = await allocateLines(client, roots, selected);
+  await validatePendingStock(client, allocated);
   const date = serverDocDate();
   const time = serverDocTime();
   const serverNumber = pending.doc_source === 'server';
-  const chunks = splitItemsIntoDocuments(roots, serverNumber ? await getErpMaxLinesPerDoc(client) : 0);
+  const chunks = splitItemsIntoDocuments(allocated, serverNumber ? await getErpMaxLinesPerDoc(client) : 0);
   const main = serverNumber
     ? await resolveMainDocNo(client, { pattern: await getOrderDocPattern(client), docDate: date, transFlag: 30, includePendingReservations: true })
     : pending.reserved_qt_no;
@@ -142,7 +126,8 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
   const numbers = chunks.map((_, i) => formatSubDocNo(main, i + 1, chunks.length));
   const existing = await client.query('SELECT doc_no FROM ic_trans WHERE doc_no=ANY($1) LIMIT 1', [numbers]);
   if (existing.rows.length) throw fail('เลข QT ถูกใช้แล้ว กรุณาติดต่อผู้ดูแลระบบ');
-  const taxMap = new Map(rows.map(row => [row.item_code, Number(row.tax_type || 0)]));
+  const taxMap = new Map(allocated.flatMap(row => [row, ...row.sub_item]).map(row => [row.item_code, Number(row.tax_type || 0)]));
+  const audit = [];
   const documentTotals = quoteTotals(chunks, header, pending.metadata, taxMap, summarizeOrderVat);
   for (let i = 0; i < chunks.length; i++) {
     const totals = documentTotals[i];
@@ -156,7 +141,8 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
     });
     let lineNumber = 0;
     for (const root of chunks[i].items) {
-      const location = selected.get(Number(root.line_number));
+      const location = { wh_code: root.wh_code, shelf_code: root.shelf_code };
+      audit.push({ source_line_number: root.__source_line, source_item_code: root.__source_item, qt_doc_no: numbers[i], qt_line_number: lineNumber + 1, item_code: root.item_code, qty: root.qty, ...location });
       for (const row of [root, ...root.sub_item]) {
         await insertColumns(client, 'ic_trans_detail', DETAIL_COLUMNS, {
           ...row, ...location, trans_flag: 30, doc_no: numbers[i], doc_date: date, doc_time: time,
@@ -173,8 +159,8 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
       [numbers[i], main, i + 1, pending.request_id, pending.cust_code]);
   }
   await client.query(
-    `UPDATE marketplace_pending_order SET status='confirmed', qt_doc_no=$2, qt_doc_nos=$3::jsonb, acted_by=$4, acted_at=NOW() WHERE doc_no=$1`,
-    [pending.doc_no, main, JSON.stringify(numbers), employeeCode]);
+    `UPDATE marketplace_pending_order SET status='confirmed', qt_doc_no=$2, qt_doc_nos=$3::jsonb, acted_by=$4, acted_at=NOW(), metadata=metadata || jsonb_build_object('confirmed_allocations',$5::jsonb) WHERE doc_no=$1`,
+    [pending.doc_no, main, JSON.stringify(numbers), employeeCode, JSON.stringify(audit)]);
   await client.query('UPDATE ic_trans SET last_status=1 WHERE doc_no=$1 AND trans_flag=300', [pending.doc_no]);
   return { duplicate: false, doc_no: main, sub_doc_nos: numbers, request_doc_no: pending.doc_no };
 }

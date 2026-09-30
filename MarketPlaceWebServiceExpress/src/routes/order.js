@@ -176,12 +176,16 @@ async function loadCheckoutQtySoFar(client, requestId, custCode) {
      JOIN ic_trans_detail d ON d.doc_no = od.sub_doc_no AND d.trans_flag=30
      WHERE od.request_id LIKE $1 || ':%' AND od.cust_code = $2
        AND COALESCE(d.is_permium,0) = 0
+       AND NOT EXISTS (
+         SELECT 1 FROM marketplace_pending_order p
+         WHERE p.request_id=od.request_id AND p.cust_code=od.cust_code AND p.status='confirmed'
+       )
      GROUP BY d.item_code, d.unit_code
      UNION ALL
      SELECT d.item_code, d.unit_code, SUM(COALESCE(d.qty,0)) AS qty
      FROM marketplace_pending_order p
      JOIN ic_trans_detail d ON d.doc_no=p.doc_no AND d.trans_flag=300
-     WHERE (p.request_id=$1 OR p.request_id LIKE $1 || ':%') AND p.cust_code=$2 AND p.status='pending'
+     WHERE (p.request_id=$1 OR p.request_id LIKE $1 || ':%') AND p.cust_code=$2 AND p.status IN ('pending','confirmed')
        AND COALESCE(d.is_permium,0)=0 AND COALESCE(d.set_ref_line,'')=''
      GROUP BY d.item_code,d.unit_code`,
     [base, custCode]

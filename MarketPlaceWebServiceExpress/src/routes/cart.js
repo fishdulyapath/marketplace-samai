@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { query, withTransaction } = require('../db');
+const { groupedStockCtes } = require('../utils/groupedStock');
 const { safePage, safePageSize } = require('../utils/response');
 const { getPreorderDefaultEnabled, getSalePremiumEnabled, getStockDisplayPercent, resolvePreorderAllowed } = require('../utils/marketplaceSalesSettings');
 const { loadSalePremiumDetail } = require('../utils/salePremiumHelper');
@@ -455,25 +456,15 @@ router.post('/getcartitemstock', async (req, res) => {
           i->>'item_code' AS item_code,
           i->>'unit_code' AS unit_code
         FROM jsonb_array_elements($1::jsonb) AS i
-      ), stock AS (
-        SELECT ic_code, SUM(balance_qty) sum_qty
-        FROM sml_ic_function_stock_balance_warehouse_location(
-          'NOW()',
-          -- ${ERP_CODE_SQL_PATTERN} เป็นค่าคงที่ในโค้ด ไม่ใช่ข้อมูลจาก client
-          (SELECT string_agg(DISTINCT item_code, ',') FROM input_items
-            WHERE item_code ~ '${ERP_CODE_SQL_PATTERN}'),
-          $2, ''
-        )
-        WHERE balance_qty > 0
-        GROUP BY ic_code
-      )
+      ),
+      ${groupedStockCtes('SELECT item_code, $2::text AS wh_code FROM input_items', 'stock')}
       SELECT
         i.item_code,
         i.unit_code,
         -- ใช้ COALESCE(NULLIF(ratio,0), 1) เหมือน getcartorder/validatecartstock
         -- เดิมหารด้วย NULL แล้วได้ NULL -> 0 สินค้าที่ไม่มีคู่ใน ic_unit_use จึงตอบ 0
         -- ขณะที่อีก 2 ทางตอบเต็ม = หน้าตะกร้าได้เลขขัดกันเอง
-        TRUNC((COALESCE(s.sum_qty,0) * $3 / 100) / COALESCE(NULLIF(u.ratio,0), 1)) AS balance_qty
+        TRUNC((COALESCE(s.balance_qty,0) * $3 / 100) / COALESCE(NULLIF(u.ratio,0), 1)) AS balance_qty
       FROM input_items i
       LEFT JOIN stock s ON s.ic_code = i.item_code
       LEFT JOIN ic_unit_use u ON u.ic_code = i.item_code AND u.code = i.unit_code
@@ -561,23 +552,7 @@ router.get('/getcartorder', async (req, res) => {
         ORDER BY w.item_code
         LIMIT $4 OFFSET $5
       ),
-      normal_codes AS (
-        -- กรองรหัสก่อน string_agg เพราะค่านี้ถูกส่งเข้าฟังก์ชันที่เอาไปต่อ SQL เอง
-        -- แถวที่มีรหัสแปลกจะได้สต็อก 0 แทนที่จะทำให้ทั้งตะกร้าพัง
-        SELECT cart_wh_code AS wh_code, string_agg(DISTINCT item_code, ',') AS codes
-        FROM cart_page
-        WHERE resolved_item_type <> 3
-          AND item_code ~ '${ERP_CODE_SQL_PATTERN}'
-          AND cart_wh_code ~ '${ERP_CODE_SQL_PATTERN_OPTIONAL}'
-        GROUP BY cart_wh_code
-      ),
-      normal_stock AS (
-        SELECT nc.wh_code, s.ic_code, SUM(s.balance_qty) AS balance_qty
-        FROM (SELECT wh_code, codes FROM normal_codes WHERE codes IS NOT NULL AND codes <> '') nc
-        CROSS JOIN LATERAL sml_ic_function_stock_balance_warehouse_location(current_date, nc.codes, nc.wh_code, '') s
-        WHERE s.balance_qty > 0
-        GROUP BY nc.wh_code, s.ic_code
-      ),
+      ${groupedStockCtes('SELECT item_code,cart_wh_code AS wh_code FROM cart_page WHERE resolved_item_type <> 3')},
       set_detail AS (
         SELECT cp.cart_wh_code AS wh_code, d.ic_set_code, d.ic_code, d.qty
         FROM cart_page cp
@@ -893,25 +868,7 @@ router.get('/validatecartstock', async (req, res) => {
       --    item_name เอามาด้วย MAX() แทน เพื่อให้หน้าจอยังมีชื่อแสดงเหมือนเดิม
       GROUP BY c.item_code, c.unit_code, COALESCE(NULLIF(c.wh_code,''), $2), COALESCE(i.item_type, 0), COALESCE(d.dimension_35,''), COALESCE(d.dimension_38,'')
     ),
-    normal_codes AS (
-      -- กรองรหัสก่อน string_agg เพราะค่านี้ถูกส่งเข้าฟังก์ชันที่เอาไปต่อ SQL เอง
-        -- แถวที่มีรหัสแปลกจะได้สต็อก 0 แทนที่จะทำให้ทั้งตะกร้าพัง
-      SELECT wh_code, string_agg(item_code, ',') AS codes
-      FROM cart
-      WHERE item_type <> 3
-        AND item_code ~ '${ERP_CODE_SQL_PATTERN}'
-        AND wh_code ~ '${ERP_CODE_SQL_PATTERN_OPTIONAL}'
-      GROUP BY wh_code
-    ),
-    normal_stock AS (
-      SELECT nc.wh_code, s.ic_code, SUM(s.balance_qty) AS balance_qty
-      FROM (SELECT wh_code, codes FROM normal_codes WHERE codes IS NOT NULL AND codes <> '') nc
-      CROSS JOIN LATERAL sml_ic_function_stock_balance_warehouse_location(
-        current_date, nc.codes, nc.wh_code, ''
-      ) s
-      WHERE s.balance_qty > 0
-      GROUP BY nc.wh_code, s.ic_code
-    ),
+    ${groupedStockCtes('SELECT item_code,wh_code FROM cart WHERE item_type <> 3')},
     set_detail AS (
       SELECT c.wh_code, d.ic_set_code, d.ic_code, d.qty
       FROM cart c

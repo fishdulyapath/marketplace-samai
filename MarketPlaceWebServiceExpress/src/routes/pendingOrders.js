@@ -5,6 +5,7 @@ const { likeContains } = require('../utils/likePattern');
 const { isIsoDate } = require('../utils/adminOrderFilters');
 const { isValidDocNoParam } = require('../utils/orderDocNo');
 const { rootLines, lockRequest, readRequest, confirmRequest, closeRequest, fail } = require('../utils/pendingOrder');
+const { loadOptions } = require('../utils/pendingAllocations');
 
 module.exports = function pendingOrders(summarizeOrderVat) {
   const router = express.Router();
@@ -12,7 +13,9 @@ module.exports = function pendingOrders(summarizeOrderVat) {
     try { return res.json({ success: true, ...await handler(req) }); }
     catch (error) {
       if (!error.statusCode) console.error('pending order action:', error.message);
-      return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'ดำเนินการไม่สำเร็จ กรุณาลองใหม่' });
+      const stockError = ['INSUFFICIENT_STOCK', 'STOCK_UNAVAILABLE'].includes(error.code);
+      return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'ดำเนินการไม่สำเร็จ กรุณาลองใหม่',
+        ...(stockError ? { code: error.code, stock_issues: error.stock_issues || [] } : {}) });
     }
   };
   const owner = (req, pending) => {
@@ -25,6 +28,9 @@ module.exports = function pendingOrders(summarizeOrderVat) {
   const list = admin => action(async req => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const size = 20;
+    const sort = String(req.query.sort || 'newest');
+    if (admin && !['newest', 'oldest'].includes(sort)) throw fail('ลำดับคิวไม่ถูกต้อง', 400);
+    const direction = admin && sort === 'oldest' ? 'ASC' : 'DESC';
     const from = req.query.date_from || null;
     const to = req.query.date_to || null;
     if ((from && !isIsoDate(from)) || (to && !isIsoDate(to)) || (from && to && from > to)) throw fail('ช่วงวันที่ไม่ถูกต้อง', 400);
@@ -39,10 +45,20 @@ module.exports = function pendingOrders(summarizeOrderVat) {
     const total = await query(`SELECT COUNT(*)::int AS total ${where}`, params);
     const result = await query(`SELECT p.doc_no,p.cust_code,p.status,p.reason,p.created_at,p.acted_at,p.acted_by,
       t.doc_date::text AS doc_date,t.doc_time,t.total_amount,c.name_1 AS cust_name ${where}
-      ORDER BY p.created_at DESC,p.doc_no DESC LIMIT $5 OFFSET $6`, [...params, size, (page - 1) * size]);
+      ORDER BY p.created_at ${direction},p.doc_no ${direction} LIMIT $5 OFFSET $6`, [...params, size, (page - 1) * size]);
     return { data: result.rows, total: total.rows[0].total, page, page_size: size };
   });
   router.get('/admin/pending-orders', pendingIdentity, pendingAdmin, list(true));
+  router.get('/admin/pending-orders/:docNo/items/:lineNumber/options', pendingIdentity, pendingAdmin, action(async req => {
+    const found = await query('SELECT status FROM marketplace_pending_order WHERE doc_no=$1', [docNo(req)]);
+    if (!found.rows.length) throw fail('ไม่พบคำขอ', 404);
+    if (found.rows[0].status !== 'pending') throw fail('คำขอถูกดำเนินการแล้ว กรุณารีเฟรชรายการ');
+    const { rows } = await readRequest({ query }, req.params.docNo);
+    const source = rootLines(rows).find(row => Number(row.line_number) === Number(req.params.lineNumber));
+    if (!source || String(source.item_type) === '3') throw fail('บรรทัดนี้ไม่รองรับการเปลี่ยนรหัสสินค้า', 400);
+    return { data: { source_line_number: source.line_number, source_item_code: source.item_code, qty: source.qty, unit_code: source.unit_code,
+      ...await loadOptions({ query }, source, { stock: true }) } };
+  }));
   router.get('/pending-orders', pendingIdentity, (req, res, next) => req.auth.isEmployee ? pendingAdmin(req, res, next) : next(), list(false));
   router.get('/pending-orders/:docNo', pendingIdentity, action(async req => {
     const found = await query('SELECT * FROM marketplace_pending_order WHERE doc_no=$1', [docNo(req)]);

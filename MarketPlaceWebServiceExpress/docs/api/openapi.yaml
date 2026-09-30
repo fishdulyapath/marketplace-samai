@@ -1778,6 +1778,7 @@ paths:
       summary: รายการรอจัดคลัง (employee + admin.orders)
       description: See pending-orders.md for response fields and lifecycle rules.
       parameters:
+        - { name: sort, in: query, schema: { type: string, enum: [newest, oldest], default: newest }, description: 'Global chronological order before pagination; ties use doc_no in the same direction.' }
         - { name: search, in: query, schema: { type: string } }
         - { name: date_from, in: query, schema: { type: string, format: date } }
         - { name: date_to, in: query, schema: { type: string, format: date } }
@@ -1814,6 +1815,22 @@ paths:
         '403': { description: Customer ownership or staff permission required }
         '404': { description: Request not found }
 
+  /admin/pending-orders/{docNo}/items/{lineNumber}/options:
+    parameters:
+      - { name: docNo, in: path, required: true, schema: { type: string } }
+      - { name: lineNumber, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Order]
+      security: [{ BearerAuth: [] }]
+      summary: สินค้าจริงที่เลือกได้ พร้อมสต๊อกรวมและรายคลัง/ที่เก็บ
+      description: Employee and admin.orders required. Server resolves the source from the pending 300 document. Original stock is physical stock, not grouped. Incompatible unit/tax options are disabled. Stock failure is reported as stock_error and null quantities, not zero. See pending-orders.md.
+      responses:
+        '200': { description: 'success and data containing source_line_number, source_item_code, qty, unit_code, options, stock_error' }
+        '400': { description: Invalid line or product set }
+        '403': { description: Employee permission required }
+        '404': { description: Request not found }
+        '409': { description: Request already closed }
+
   /admin/pending-orders/{docNo}/confirm:
     parameters:
       - { name: docNo, in: path, required: true, schema: { type: string } }
@@ -1821,7 +1838,7 @@ paths:
       tags: [Order]
       security: [{ BearerAuth: [] }]
       summary: ยืนยันสร้าง QT/30 (employee + admin.orders)
-      description: Uses only persisted commercial data. Set children inherit the root allocation. No stock check. sale_code comes only from employee token. Serialized with cancellation/rejection.
+      description: Uses persisted commercial data. Normal lines may split across physical codes whose name_eng_2 matches the source code, or keep the original. Quantities must sum to the source, with compatible units and tax. Set lines cannot split or change code. Rechecks physical stock at each allocated warehouse/shelf before writing any QT, aggregating base-unit demand across all lines, gifts and expanded set components. Insufficient or unavailable stock blocks confirmation, not customer submission. This is a balance check, not a stock reservation. sale_code comes only from employee token. Serialized with cancellation/rejection. Legacy allocations without item_code and qty retain the original code/full quantity.
       requestBody:
         required: true
         content:
@@ -1837,6 +1854,8 @@ paths:
                     required: [line_number, wh_code, shelf_code]
                     properties:
                       line_number: { type: integer }
+                      item_code: { type: string, description: Original code or direct physical member }
+                      qty: { type: number, exclusiveMinimum: true, minimum: 0, description: Allocated quantity; send with item_code }
                       wh_code: { type: string }
                       shelf_code: { type: string }
       responses:
@@ -1844,6 +1863,8 @@ paths:
         '400': { description: Missing allocation or invalid master warehouse/shelf relationship }
         '403': { description: Employee token and admin.orders required }
         '409': { description: Request closed or QT number unavailable }
+        '422': { description: 'INSUFFICIENT_STOCK; success=false, message, code, stock_issues containing item_code, wh_code, shelf_code, required_qty and available_qty in base units. Request remains pending.' }
+        '503': { description: 'STOCK_UNAVAILABLE; unable to verify stock or unit conversion. No QT written; keep the draft and retry.' }
 
   /admin/pending-orders/{docNo}/reject:
     parameters:

@@ -17,6 +17,10 @@ export default {
         const { data } = await api.post(`${adminPath(docNo)}/confirm`, { allocations });
         return data;
     },
+    async options(docNo, lineNumber) {
+        const { data } = await api.get(`${adminPath(docNo)}/items/${encodeURIComponent(lineNumber)}/options`);
+        return data.data;
+    },
     async reject(docNo, reason) {
         const { data } = await api.post(`${adminPath(docNo)}/reject`, { reason });
         return data;
