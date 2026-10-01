@@ -1,5 +1,4 @@
 const { normalizeAllocations, allocateLines } = require('./pendingAllocations');
-const { validatePendingStock } = require('./pendingStock');
 const { splitItemsIntoDocuments } = require('./orderDocSplit');
 const { resolveMainDocNo, formatSubDocNo } = require('./orderDocNo');
 const { getOrderDocPattern, getErpMaxLinesPerDoc } = require('./marketplaceSalesSettings');
@@ -111,7 +110,6 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
   const roots = rootLines(rows, pending.metadata);
   const selected = validateAllocations(roots, allocations);
   const allocated = await allocateLines(client, roots, selected);
-  await validatePendingStock(client, allocated);
   const date = serverDocDate();
   const time = serverDocTime();
   const serverNumber = pending.doc_source === 'server';

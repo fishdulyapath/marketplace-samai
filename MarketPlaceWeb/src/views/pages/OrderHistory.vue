@@ -1,5 +1,5 @@
 <script setup>
-import PendingOrders from '@/components/orders/PendingOrders.vue';
+import PendingOrderService from '@/services/PendingOrderService';
 import CartService from '@/services/CartService';
 import { PRODUCT_IMAGE_PLACEHOLDER } from '@/utils/productPlaceholder';
 import OrderHistoryService from '@/services/OrderHistoryService';
@@ -9,6 +9,7 @@ import { useLanguageStore } from '@/stores/languageStore';
 import { pickProductName, withProductDisplay } from '@/utils/languageDisplay';
 import { PREORDER_REMARK } from '@/utils/preorderSplit';
 import { getOrderTotalBeforeVat } from '@/utils/orderTaxTotals';
+import { orderLineKey, paymentDetails, payableAmount } from '@/utils/mprOrderHistory';
 
 import axios from 'axios';
 import { useToast } from 'primevue/usetoast';
@@ -137,6 +138,9 @@ function normalizeDisplayItem(item = {}) {
 
 // สถานะของออเดอร์และสีที่ใช้แสดง
 const orderStatuses = computed(() => ({
+    awaiting_confirmation: { label: 'รอพนักงานยืนยัน', color: 'warning', icon: 'pi pi-clock' },
+    cancelled: { label: 'ลูกค้ายกเลิก', color: 'danger', icon: 'pi pi-times-circle' },
+    rejected: { label: 'พนักงานปฏิเสธ', color: 'danger', icon: 'pi pi-ban' },
     pending: { label: t('historyPages.status.pending'), color: 'warning', icon: 'pi pi-clock' },
     packing: { label: t('historyPages.status.packing'), color: 'primary', icon: 'pi pi-box' },
     payment: { label: t('historyPages.status.payment'), color: 'primary', icon: 'pi pi-send' },
@@ -195,7 +199,7 @@ onUnmounted(() => {
 // กรองออเดอร์
 const filters = reactive({
     status: '',
-    dateRange: null,
+    dateRange: ['', ''],
     searchTerm: ''
 });
 
@@ -236,7 +240,9 @@ async function fetchOrderHistory({ append = false } = {}) {
         }
 
         const nextPage = append ? ordersPage.value + 1 : 1;
-        const response = await OrderHistoryService.getOrderHistory(custCode, filters.status || '', nextPage, ORDERS_PAGE_SIZE);
+        const response = await OrderHistoryService.getOrderHistory(custCode, filters.status || '', nextPage, ORDERS_PAGE_SIZE, {
+            search: filters.searchTerm, dateFrom: filters.dateRange?.[0], dateTo: filters.dateRange?.[1]
+        });
 
         if (response?.data?.success) {
             // กำหนดค่า default สำหรับยอดรวมแยกตามประเภทภาษีในรายการออเดอร์
@@ -416,7 +422,7 @@ function itemStatusOf(item) {
     if (!showPerLine) return null;
     // บรรทัดที่ถูกยกไปอยู่ในใบสั่งขายแล้ว ใช้สถานะของใบนั้น
     // ที่ยังไม่ถูกยกไปใบไหน (ของหมด/ยังไม่จัด) ตกไปใช้เลขเอกสารย่อยเหมือนเดิม
-    const status = subDocStatusMap.value.get(String(item?.so_doc_no || '')) ?? subDocStatusMap.value.get(String(item?.doc_no || ''));
+    const status = item.progress_status || subDocStatusMap.value.get(String(item?.so_doc_no || '')) || subDocStatusMap.value.get(String(item?.doc_no || ''));
     const key = ITEM_STATUS_LABEL[status];
     if (!key) return null;
     return { status, label: t(`historyPages.common.${key}`), cancelled: status === 'cancel' };
@@ -477,6 +483,7 @@ const salesDocRows = computed(() =>
 
 function shipStateOf(item) {
     const state = item?.ship_state;
+    if (state === 'unknown') return { label: 'รอตรวจสอบความคืบหน้ารายการ', removed: false };
     // ของที่ร้านเพิ่มให้ตอนจัดของ (ของแถม/ของทดแทน) ไม่มีบรรทัดคู่กันในใบสั่งซื้อ
     // ต้องบอกลูกค้าให้ชัดว่าไม่ใช่ของที่ตัวเองกดสั่ง
     if (state === 'added') return { label: t('historyPages.common.itemAddedByStore'), removed: false, added: true };
@@ -610,39 +617,12 @@ async function handleStatusChange() {
 }
 
 // ออเดอร์ที่ผ่านการกรอง
-const filteredOrders = computed(() => {
-    if (!orders.value) return [];
-
-    return orders.value.filter((order) => {
-        // กรองตามคำค้นหา
-        if (filters.searchTerm) {
-            const searchLower = String(filters.searchTerm || '').toLowerCase();
-            const docNoMatch = String(order?.doc_no || '').toLowerCase().includes(searchLower);
-            const statusLabel = String(getOrderStatus(order.status).label || '').toLowerCase();
-            const statusMatch = statusLabel.includes(searchLower);
-
-            return docNoMatch || statusMatch;
-        }
-
-        // กรองตามช่วงวันที่
-        if (filters.dateRange && filters.dateRange.length === 2) {
-            const orderDate = toDateTimestamp(order?.doc_date);
-            const startDate = toDateTimestamp(filters.dateRange[0]);
-            const endDate = toDateTimestamp(filters.dateRange[1], true);
-
-            if (orderDate === null || startDate === null || endDate === null || orderDate < startDate || orderDate > endDate) {
-                return false;
-            }
-        }
-
-        return true;
-    });
-});
+const filteredOrders = computed(() => orders.value || []);
 
 // รีเซ็ตการกรอง
 function resetFilters() {
     filters.status = '';
-    filters.dateRange = null;
+    filters.dateRange = ['', ''];
     filters.searchTerm = '';
     fetchOrderHistory();
 }
@@ -666,6 +646,15 @@ async function processCancelOrder() {
     try {
         loading.value = true;
 
+        if (orderToCancel.value.request_status === 'pending') {
+            await PendingOrderService.cancel(orderToCancel.value.mpr_doc_no);
+            confirmCancelDialog.value = false;
+            displayOrderDetails.value = false;
+            toast.add({ severity: 'success', summary: 'ยกเลิกคำขอแล้ว', life: 3000 });
+            await fetchOrderHistory();
+            return;
+        }
+
         // ต้องดึง{{ t('historyPages.common.productItems') }}{{ t('historyPages.common.all') }}ก่อนยกเลิก
         const items = await OrderHistoryService.getAllOrderDetails(userCode, orderToCancel.value.doc_no);
 
@@ -676,7 +665,7 @@ async function processCancelOrder() {
         // เลขที่ใบยกเลิกและวันเวลาออกจาก server (REQ4/REQ6)
         // คำสั่งซื้อที่ถูกแบ่งเป็นหลายเอกสาร server จะสร้างใบยกเลิกให้ครบทุกใบเอง
         const cancelOrderData = {
-            doc_ref: orderToCancel.value.doc_no, // เลขที่เอกสารเดิม (เลขหลัก) ที่ต้องการยกเลิก
+            doc_ref: orderToCancel.value.qt_main_doc_no || orderToCancel.value.doc_no,
             cust_code: orderToCancel.value.cust_code,
             emp_code: orderToCancel.value.emp_code || '',
             total_value: orderToCancel.value.total_amount,
@@ -1005,9 +994,8 @@ async function generateQRCode() {
 
     try {
         // คำนวณยอดเงินรวมของเอกสารที่เลือก
-        paymentAmount.value = selectedOrdersForPayment.value.reduce((sum, order) => {
-            return sum + toMoneyNumber(order.total_amount);
-        }, 0);
+        paymentAmount.value = paymentDetails(selectedOrdersForPayment.value).reduce((sum, doc) => sum + doc.total_amount, 0);
+        if (paymentAmount.value <= 0) throw new Error(t('historyPages.toast.noPayableDocs'));
 
         // console.log('💰 Payment amount calculated:', paymentAmount.value);
 
@@ -1230,12 +1218,7 @@ async function savePaymentTransaction() {
             no_approved: txnData.value?.txnNo || '',
             emp_code: selectedOrdersForPayment.value[0].emp_code || '',
             remark: '',
-            doc_detail: selectedOrdersForPayment.value.map((order) => ({
-                trans_flag: '44',
-                doc_no: order.inv_doc_no,
-                doc_date: order.inv_doc_date,
-                total_amount: toMoneyNumber(order.total_amount)
-            }))
+            doc_detail: paymentDetails(selectedOrdersForPayment.value)
         };
 
         // console.log('Sending payment data:', paymentData);
@@ -1271,7 +1254,7 @@ function showQRPayment(orders) {
     }
 
     // ต้องการเฉพาะเอกสารที่สถานะ payment หรือ partial
-    const validOrders = orders.filter((order) => order.status === 'payment');
+    const validOrders = orders.filter((order) => order.status === 'payment' && payableAmount(order) > 0);
     // console.log('✅ Valid orders for payment:', validOrders);
 
     if (validOrders.length === 0) {
@@ -1403,15 +1386,11 @@ const payableOrdersCount = computed(() => {
 
 // คำนวณยอดรวมของออเดอร์ที่เลือก
 const selectedOrdersTotal = computed(() => {
-    return selectedOrders.value.reduce((sum, order) => {
-        return sum + toMoneyNumber(order.total_amount);
-    }, 0);
+    return paymentDetails(selectedOrders.value).reduce((sum, doc) => sum + doc.total_amount, 0);
 });
 
 const selectedPaymentDocsTotal = computed(() => {
-    return selectedOrdersForPayment.value.reduce((sum, order) => {
-        return sum + toMoneyNumber(order.total_amount);
-    }, 0);
+    return paymentDetails(selectedOrdersForPayment.value).reduce((sum, doc) => sum + doc.total_amount, 0);
 });
 
 const orderMetrics = computed(() => {
@@ -1500,7 +1479,6 @@ onMounted(fetchOrderHistory);
 <template>
     <div class="oh-page">
         <div class="oh-container">
-            <PendingOrders :cust-code="userCode" @changed="fetchOrderHistory()" />
             <!-- ══ TOP BAR ══════════════════════════════════ -->
             <div class="oh-topbar mb-4">
                 <div class="oh-topbar__left">
@@ -1583,9 +1561,16 @@ onMounted(fetchOrderHistory);
             <!-- ══ SEARCH BAR ════════════════════════════════ -->
             <div class="soh-search mb-3">
                 <IconField iconPosition="left" class="w-full">
-                    <InputText v-model="filters.searchTerm" :placeholder="t('historyPages.orders.searchPlaceholder')" :aria-label="t('historyPages.orders.searchPlaceholder')" class="w-full soh-search__input" />
+                    <InputText v-model="filters.searchTerm" placeholder="ค้นหาเลข MPR / QT หรือสินค้า แล้วกด Enter" :aria-label="t('historyPages.orders.searchPlaceholder')" class="w-full soh-search__input" @keydown.enter="fetchOrderHistory()" />
                     <InputIcon class="pi pi-search" />
                 </IconField>
+                <Button label="ค้นหา" icon="pi pi-search" :disabled="loading" @click="fetchOrderHistory()" />
+            </div>
+            <div class="flex flex-wrap items-end gap-3 mb-3">
+                <label class="text-sm">ตั้งแต่วันที่ <input v-model="filters.dateRange[0]" type="date" class="block border rounded p-2" /></label>
+                <label class="text-sm">ถึงวันที่ <input v-model="filters.dateRange[1]" type="date" class="block border rounded p-2" /></label>
+                <Button label="กรองวันที่" outlined :disabled="loading" @click="fetchOrderHistory()" />
+                <Button label="ล้างตัวกรอง" text :disabled="loading" @click="resetFilters" />
             </div>
 
             <!-- ══ STATES ════════════════════════════════════ -->
@@ -1620,6 +1605,7 @@ onMounted(fetchOrderHistory);
                             </div>
                             <i class="pi pi-shop soh-card__shop-icon"></i>
                             <span class="soh-card__shop-name">{{ order.doc_no }}</span>
+                            <span v-if="order.mpr_doc_no && order.qt_doc_nos?.length" class="text-xs text-gray-500 break-all">QT: {{ order.qt_doc_nos.join(', ') }}</span>
                             <span v-if="isPreorderOrder(order)" class="soh-preorder-chip"><i class="pi pi-clock mr-1"></i>{{ getPreorderOrderLabel() }}</span>
                             <span v-if="order.emp_name" class="soh-card__emp"> <i class="pi pi-comment mr-0.5"></i>{{ order.emp_name }} </span>
                         </div>
@@ -1639,6 +1625,7 @@ onMounted(fetchOrderHistory);
                     </div>
                     <div v-if="hasDisplayOrderRemark(order, 'remark_qt')" class="soh-card__remark"><i class="pi pi-info-circle mr-1.5 text-gray-400"></i>{{ getDisplayOrderRemark(order, 'remark_qt') }}</div>
                     <div v-if="order.remark_cancel" class="soh-card__remark soh-card__remark--cancel"><i class="pi pi-times-circle mr-1.5"></i>{{ order.remark_cancel }}</div>
+                    <div v-if="order.reason" class="soh-card__remark soh-card__remark--cancel">{{ order.reason }}</div>
 
                     <!-- ── Product summary row (Shopee-style) ── -->
                     <div class="soh-card__product">
@@ -1682,7 +1669,7 @@ onMounted(fetchOrderHistory);
                         </div>
 
                         <div class="soh-card__foot-actions">
-                            <button v-if="order.status === 'pending'" type="button" class="soh-btn soh-btn--ghost soh-btn--danger" :disabled="isOrderActionBusy" @click="showCancelConfirmation(order)">{{ t('historyPages.orders.cancelOrder') }}</button>
+                            <button v-if="order.can_cancel" type="button" class="soh-btn soh-btn--ghost soh-btn--danger" :disabled="isOrderActionBusy" @click="showCancelConfirmation(order)">{{ t('historyPages.orders.cancelOrder') }}</button>
                             <button v-if="qrPaymentEnabled && order.status === 'payment' && !multiSelectMode" type="button" class="soh-btn soh-btn--warning" :disabled="isOrderActionBusy" @click="showQRPayment(order)">{{ t('historyPages.common.payQr') }}</button>
                             <button v-if="multiSelectMode && (order.status === 'payment')" type="button" :class="['soh-btn', isOrderSelected(order) ? 'soh-btn--ghost' : 'soh-btn--outline']" :aria-pressed="isOrderSelected(order)" :disabled="isOrderActionBusy" @click="toggleOrderSelection(order)">
                                 {{ isOrderSelected(order) ? t('historyPages.common.cancel') : t('historyPages.common.select') }}
@@ -1730,6 +1717,7 @@ onMounted(fetchOrderHistory);
                         <div class="detail-hero__left">
                             <div class="detail-hero__caption">{{ t('historyPages.common.docNo') }}</div>
                             <div class="detail-hero__doc">{{ selectedOrder.doc_no }}</div>
+                            <div v-if="selectedOrder.mpr_doc_no && selectedOrder.qt_doc_nos?.length" class="text-sm break-all">QT: {{ selectedOrder.qt_doc_nos.join(', ') }}</div>
                             <div class="detail-hero__date">{{ formatDate(selectedOrder.doc_date, selectedOrder.doc_time) }}</div>
                         </div>
                         <div class="detail-hero__right">
@@ -1755,6 +1743,7 @@ onMounted(fetchOrderHistory);
                                 <i :class="[getOrderStatus(selectedOrder.status).icon, 'text-xl mr-2', `text-${getOrderStatus(selectedOrder.status).color}-500`]"></i>
                                 <span class="font-semibold">{{ getOrderStatus(selectedOrder.status).label }}</span>
                             </div>
+                            <p v-if="selectedOrder.reason" class="text-sm text-red-600 mt-2">{{ selectedOrder.reason }}</p>
                             <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">
                                 <div>{{ t('historyPages.common.orderDate') }} {{ formatDate(selectedOrder.doc_date, selectedOrder.doc_time) }}</div>
 
@@ -1994,7 +1983,7 @@ onMounted(fetchOrderHistory);
 
                                 <!-- Table rows -->
                                 <div class="divide-y divide-gray-200 dark:divide-gray-700">
-                                    <template v-for="(item, index) in selectedOrderDetails" :key="index">
+                                    <template v-for="(item, index) in selectedOrderDetails" :key="orderLineKey(item)">
                                         <!-- สินค้าปกติ หรือ สินค้าชุด (หัวข้อหลัก) -->
                                         <div class="grid grid-cols-12 p-3 hover:bg-gray-50 dark:hover:bg-gray-800" :class="{ 'bg-purple-50 dark:bg-purple-900/20': item.item_type === 3 || item.item_type === '3' }">
                                             <div class="col-span-5">
@@ -2005,15 +1994,15 @@ onMounted(fetchOrderHistory);
                                                     <Tag v-if="item.item_type === 3 || item.item_type === '3'" :value="t('historyPages.common.set')" severity="secondary" class="ml-2 text-xs" />
                                                     <Button
                                                         v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0"
-                                                        :icon="isSetItemExpanded(item.item_code) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                                                        :icon="isSetItemExpanded(orderLineKey(item)) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
                                                         text
                                                         rounded
                                                         size="small"
-                                                        :aria-expanded="isSetItemExpanded(item.item_code)"
-                                                        :aria-label="isSetItemExpanded(item.item_code) ? t('historyPages.common.hideSubItems') : t('historyPages.common.showSubItems')"
-                                                        @click="toggleSetItemExpand(item.item_code)"
+                                                        :aria-expanded="isSetItemExpanded(orderLineKey(item))"
+                                                        :aria-label="isSetItemExpanded(orderLineKey(item)) ? t('historyPages.common.hideSubItems') : t('historyPages.common.showSubItems')"
+                                                        @click="toggleSetItemExpand(orderLineKey(item))"
                                                         class="ml-2 p-1"
-                                                        v-tooltip.top="isSetItemExpanded(item.item_code) ? t('historyPages.common.hideSubItems') : t('historyPages.common.showSubItems')"
+                                                        v-tooltip.top="isSetItemExpanded(orderLineKey(item)) ? t('historyPages.common.hideSubItems') : t('historyPages.common.showSubItems')"
                                                     />
                                                 </div>
                                                 <div class="text-xs text-gray-500 dark:text-gray-400">{{ t('historyPages.common.code') }} {{ item.item_code }}</div>
@@ -2034,7 +2023,7 @@ onMounted(fetchOrderHistory);
                                         </div>
 
                                         <!-- Sub items สำหรับสินค้าชุด (แสดงเมื่อ expand) -->
-                                        <template v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0 && isSetItemExpanded(item.item_code)">
+                                        <template v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0 && isSetItemExpanded(orderLineKey(item))">
                                             <div v-for="(subItem, subIndex) in item.sub_item" :key="`${index}-sub-${subIndex}`" class="grid grid-cols-12 p-3 bg-gray-50 dark:bg-gray-800/50 border-purple-300 dark:border-purple-600">
                                                 <div class="col-span-5">
                                                     <div class="font-medium text-gray-700 dark:text-gray-300 flex items-center">
@@ -2060,7 +2049,7 @@ onMounted(fetchOrderHistory);
 
                         <!-- Card View (visible based on screen width using JS) -->
                         <div v-else class="order-items-cards">
-                            <template v-for="(item, index) in selectedOrderDetails" :key="index">
+                            <template v-for="(item, index) in selectedOrderDetails" :key="orderLineKey(item)">
                                 <!-- สินค้าปกติ หรือ สินค้าชุด (หัวข้อหลัก) -->
                                 <div class="mb-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg" :class="{ 'border-purple-300 dark:border-purple-600 bg-purple-50 dark:bg-purple-900/20': item.item_type === 3 || item.item_type === '3' }">
                                     <div class="flex justify-between items-start mb-2">
@@ -2070,13 +2059,13 @@ onMounted(fetchOrderHistory);
                                             <!-- ปุ่มกดเปิด/ปิดรายการย่อยสำหรับสินค้าชุด (Mobile) -->
                                             <Button
                                                 v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0"
-                                                :icon="isSetItemExpanded(item.item_code) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                                                :icon="isSetItemExpanded(orderLineKey(item)) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
                                                 text
                                                 rounded
                                                 size="small"
-                                                :aria-expanded="isSetItemExpanded(item.item_code)"
-                                                :aria-label="isSetItemExpanded(item.item_code) ? t('historyPages.common.hideSubItems') : t('historyPages.common.showSubItems')"
-                                                @click="toggleSetItemExpand(item.item_code)"
+                                                :aria-expanded="isSetItemExpanded(orderLineKey(item))"
+                                                :aria-label="isSetItemExpanded(orderLineKey(item)) ? t('historyPages.common.hideSubItems') : t('historyPages.common.showSubItems')"
+                                                @click="toggleSetItemExpand(orderLineKey(item))"
                                                 class="p-1"
                                             />
                                         </div>
@@ -2095,7 +2084,7 @@ onMounted(fetchOrderHistory);
                                     </div>
                                     <div v-if="Number(item.is_permium) === 1" class="mb-2"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300"><i class="pi pi-gift text-xs" /> ของแถม</span></div>
                                     <!-- แสดงจำนวนรายการย่อยเมื่อยุบ (Mobile) -->
-                                    <div v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0 && !isSetItemExpanded(item.item_code)" class="text-xs text-purple-500 dark:text-purple-400 mb-2">
+                                    <div v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0 && !isSetItemExpanded(orderLineKey(item))" class="text-xs text-purple-500 dark:text-purple-400 mb-2">
                                         <i class="pi pi-list mr-1"></i>{{ t('historyPages.common.subItemsCollapsed', { count: item.sub_item.length }) }}
                                     </div>
                                     <div class="grid grid-cols-3 text-sm mt-2">
@@ -2114,7 +2103,7 @@ onMounted(fetchOrderHistory);
                                     </div>
 
                                     <!-- Sub items สำหรับสินค้าชุด (Mobile Card View) - แสดงเมื่อ expand -->
-                                    <div v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0 && isSetItemExpanded(item.item_code)" class="mt-3 pt-3 border-t border-purple-200 dark:border-purple-700">
+                                    <div v-if="(item.item_type === 3 || item.item_type === '3') && item.sub_item && item.sub_item.length > 0 && isSetItemExpanded(orderLineKey(item))" class="mt-3 pt-3 border-t border-purple-200 dark:border-purple-700">
                                         <div class="text-xs text-purple-600 dark:text-purple-400 font-medium mb-2"><i class="pi pi-list mr-1"></i>{{ t('historyPages.common.subItemsTitle') }}</div>
                                         <div v-for="(subItem, subIndex) in item.sub_item" :key="`${index}-sub-${subIndex}`" class="mb-2 p-2 bg-white dark:bg-gray-800 rounded border-l-2 border-purple-400">
                                             <div class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ getItemDisplayName(subItem) }}</div>
@@ -2180,7 +2169,7 @@ onMounted(fetchOrderHistory);
                                 <div v-if="parseFloat(selectedOrder.balance) > 0" class="border-b border-gray-200 dark:border-gray-700 pb-2">
                                     <div class="flex justify-between text-sm mb-1 text-green-600">
                                         <span>{{ t('historyPages.common.paidAmount') }}</span>
-                                        <span class="font-medium">฿{{ formatCurrency(toMoneyNumber(selectedOrder.total_amount) - toMoneyNumber(selectedOrder.balance)) }}</span>
+                                        <span class="font-medium">฿{{ formatCurrency(Math.max(0, toMoneyNumber(selectedOrder.invoiced_amount || selectedOrder.total_amount) - toMoneyNumber(selectedOrder.balance))) }}</span>
                                     </div>
                                     <div class="flex justify-between text-sm text-red-600">
                                         <span>{{ t('historyPages.common.outstandingBalance') }}</span>
@@ -2208,7 +2197,7 @@ onMounted(fetchOrderHistory);
 
                 <template #footer>
                     <div class="flex flex-wrap gap-2 justify-end">
-                        <Button v-if="selectedOrder && selectedOrder.status === 'pending'" :label="t('historyPages.orders.cancelOrder')" icon="pi pi-times-circle" severity="danger" size="small" @click="showCancelConfirmation(selectedOrder)" />
+                        <Button v-if="selectedOrder?.can_cancel" :label="t('historyPages.orders.cancelOrder')" icon="pi pi-times-circle" severity="danger" size="small" @click="showCancelConfirmation(selectedOrder)" />
                         <Button v-if="qrPaymentEnabled && selectedOrder && selectedOrder.status === 'payment'" :label="t('historyPages.common.payQr')" icon="pi pi-qrcode" severity="warning" size="small" @click="showQRPayment(selectedOrder)" />
                         <Button
                             v-if="selectedOrder"
@@ -2329,7 +2318,7 @@ onMounted(fetchOrderHistory);
                                         {{ formatDate(order.doc_date, order.doc_time) }}
                                     </div>
                                 </div>
-                                <div class="text-right font-bold whitespace-nowrap">฿{{ formatCurrency(order.total_amount) }}</div>
+                                <div class="text-right font-bold whitespace-nowrap">฿{{ formatCurrency(payableAmount(order)) }}</div>
                             </div>
                         </div>
                     </div>
@@ -2981,6 +2970,9 @@ onMounted(fetchOrderHistory);
 
 /* ── Search bar ── */
 .soh-search {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
     margin-top: 10px;
 }
 :deep(.soh-search__input) {
@@ -3095,7 +3087,9 @@ onMounted(fetchOrderHistory);
 }
 
 .soh-status-label--pending,
-.soh-status-icon--pending {
+.soh-status-icon--pending,
+.soh-status-label--awaiting_confirmation,
+.soh-status-icon--awaiting_confirmation {
     color: #f59e0b;
 }
 .soh-status-label--payment,
@@ -3115,7 +3109,11 @@ onMounted(fetchOrderHistory);
     color: #10b981;
 }
 .soh-status-label--cancel,
-.soh-status-icon--cancel {
+.soh-status-icon--cancel,
+.soh-status-label--cancelled,
+.soh-status-icon--cancelled,
+.soh-status-label--rejected,
+.soh-status-icon--rejected {
     color: #ef4444;
 }
 .soh-status-label--approve,

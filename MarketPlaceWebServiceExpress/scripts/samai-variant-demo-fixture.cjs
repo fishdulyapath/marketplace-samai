@@ -145,12 +145,8 @@ async function main() {
     const validLocations = (await db.query("SELECT w.code AS wh_code,s.code AS shelf_code FROM ic_warehouse w JOIN ic_shelf s ON s.whcode=w.code WHERE w.code<>'' AND s.code<>'' ORDER BY w.code,s.code")).rows;
     const firstStock = options.options.find(r => r.item_code === members[0]).locations;
     const zeroLocation = validLocations.find(location => !firstStock.some(stock => stock.wh_code === location.wh_code && stock.shelf_code === location.shelf_code && stock.balance_qty > 0));
-    if (zeroLocation) {
-      const shortage = await request(app).post(confirmPath).set('Authorization', employeeAuth).send({ allocations: [{ ...allocation[0], wh_code: zeroLocation.wh_code, shelf_code: zeroLocation.shelf_code }, allocation[1]] });
-      assert.equal(shortage.status, 422, JSON.stringify(shortage.body));
-      assert.equal(shortage.body.code, 'INSUFFICIENT_STOCK');
-    }
-    const confirmAllocation = allocation;
+    const confirmAllocation = zeroLocation
+      ? [{ ...allocation[0], wh_code: zeroLocation.wh_code, shelf_code: zeroLocation.shelf_code }, allocation[1]] : allocation;
     const confirmed = await request(app).post(confirmPath).set('Authorization', employeeAuth).send({ allocations: confirmAllocation, sale_code: 'IGNORE-BODY' });
     assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
     const qt = confirmed.body.sub_doc_nos;
@@ -172,13 +168,13 @@ async function main() {
     assert.equal(audit.length, 2);
     console.log('300 → QT verified (will roll back):', JSON.stringify({ source: doc, qt, details: saved }));
     // Some demos have only one valid master location. The display parent has
-    // physical stock zero there: grouped stock must not permit parent approval.
+    // Some demos have only one valid master location. The display parent has
+    // physical stock zero there, so it also proves stock is advisory, not a gate.
     const zeroRequest = await request(app).post('/sendorder').set('Authorization', customerAuth).send({ ...body, request_id: `${id}:zero`, doc_no: `${body.doc_no}Z` });
     assert.equal(zeroRequest.status, 200, JSON.stringify(zeroRequest.body));
     const zeroConfirm = await request(app).post(`/admin/pending-orders/${zeroRequest.body.doc_no}/confirm`).set('Authorization', employeeAuth).send({ allocations: [{ line_number: 1, item_code: parent, qty: 10, wh_code: allocation[0].wh_code, shelf_code: allocation[0].shelf_code }] });
-    assert.equal(zeroConfirm.status, 422, JSON.stringify(zeroConfirm.body));
-    assert.equal(zeroConfirm.body.code, 'INSUFFICIENT_STOCK');
-    console.log('Zero physical stock blocked: PASSED (will roll back)');
+    assert.equal(zeroConfirm.status, 200, JSON.stringify(zeroConfirm.body));
+    console.log('Zero physical stock approval: PASSED (will roll back)');
     await db.query('ROLLBACK TO SAVEPOINT route_reads');
     const apply = process.argv.includes('--apply');
     await db.query(apply ? 'COMMIT' : 'ROLLBACK');

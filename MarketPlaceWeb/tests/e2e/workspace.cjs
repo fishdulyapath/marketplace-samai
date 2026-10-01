@@ -31,6 +31,8 @@ const os = require('node:os');
             await page.getByRole('option', { name: /PRODUCT001-B —/ }).click();
             await first.locator('.stock-strip summary').last().click();
             await first.getByRole('button', { name: 'ใช้ตำแหน่งนี้' }).last().click();
+            assert.equal(await page.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).isDisabled(), true);
+            await first.getByRole('button', { name: 'เสร็จและถัดไป', exact: true }).click();
             await page
                 .getByText('จัดสรรครบ 1 / 3 รายการ', { exact: true })
                 .waitFor()
@@ -43,9 +45,10 @@ const os = require('node:os');
             await page.getByText('จัดสรรครบ 0 / 3 รายการ', { exact: true }).waitFor();
             if (width < 761) await page.getByRole('button', { name: 'กลับไปคิวคำขอ' }).click();
             await page.getByRole('button', { name: /MPR260930000001/ }).click();
-            await page.getByText('จัดสรรครบ 1 / 3 รายการ', { exact: true }).waitFor();
+            await page.getByText('จัดสรรครบ 0 / 3 รายการ', { exact: true }).waitFor();
             assert.equal(await first.getByRole('spinbutton').first().inputValue(), '6');
             assert.equal(await first.getByRole('spinbutton').last().inputValue(), '4');
+            await first.getByRole('button', { name: 'เสร็จและถัดไป', exact: true }).click();
             for (const code of ['PRODUCT002', 'SET001']) {
                 const line = page.getByRole('article', { name: `จัดสรร ${code}`, exact: true });
                 if (code === 'SET001') {
@@ -58,6 +61,7 @@ const os = require('node:os');
                 await line.getByRole('combobox', { name: 'ที่เก็บจัดสรร 1', exact: true }).click();
                 await page.getByRole('option', { name: 'LC01 — โซนขายปลีก', exact: true }).click();
                 await page.waitForFunction(() => !document.querySelector('[role="listbox"]'));
+                await line.getByRole('button', { name: 'เสร็จและถัดไป', exact: true }).click();
             }
             await page.getByText('จัดสรรครบ 3 / 3 รายการ', { exact: true }).waitFor();
             assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `No overflow at ${width}px`);

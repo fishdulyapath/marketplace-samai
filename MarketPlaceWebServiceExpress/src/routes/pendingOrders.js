@@ -13,9 +13,7 @@ module.exports = function pendingOrders(summarizeOrderVat) {
     try { return res.json({ success: true, ...await handler(req) }); }
     catch (error) {
       if (!error.statusCode) console.error('pending order action:', error.message);
-      const stockError = ['INSUFFICIENT_STOCK', 'STOCK_UNAVAILABLE'].includes(error.code);
-      return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'ดำเนินการไม่สำเร็จ กรุณาลองใหม่',
-        ...(stockError ? { code: error.code, stock_issues: error.stock_issues || [] } : {}) });
+      return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'ดำเนินการไม่สำเร็จ กรุณาลองใหม่' });
     }
   };
   const owner = (req, pending) => {

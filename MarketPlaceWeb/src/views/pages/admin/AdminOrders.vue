@@ -50,17 +50,19 @@ const totalPages = computed(() => Math.max(1, Math.ceil(totalOrders.value / PAGE
 const rangeStart = computed(() => (totalOrders.value === 0 ? 0 : (page.value - 1) * PAGE_SIZE + 1));
 const rangeEnd = computed(() => Math.min(page.value * PAGE_SIZE, totalOrders.value));
 
-// แท็บสถานะ — "รอตรวจสอบ" ขึ้นก่อนและเป็นค่าเริ่มต้น
-// เป้าหมายหลักของหน้านี้คือเห็นออเดอร์ใหม่ที่เข้ามาทันที (คู่กับรีเฟรชทุก 2 นาที)
+// Unified history starts on All so pending requests and confirmed QTs are both visible.
 const STATUS_TABS = [
+    { value: 'awaiting_confirmation', label: 'รอพนักงานยืนยัน' },
     { value: 'pending', label: 'รอตรวจสอบ' },
     { value: '', label: 'ทั้งหมด' },
     { value: 'packing', label: 'กำลังจัดสินค้า' },
     { value: 'payment', label: 'เตรียมนำส่ง - กำลังนำส่ง' },
     { value: 'success', label: 'จัดส่งสำเร็จ' },
-    { value: 'cancel', label: 'ยกเลิก / ติดต่อพนักงาน' }
+    { value: 'cancel', label: 'ยกเลิก / ติดต่อพนักงาน' },
+    { value: 'cancelled', label: 'ลูกค้ายกเลิก' },
+    { value: 'rejected', label: 'พนักงานปฏิเสธ' }
 ];
-const statusTab = ref('pending');
+const statusTab = ref('');
 const statusCounts = ref({});
 
 function tabCount(value) {
@@ -77,6 +79,9 @@ function selectTab(value) {
 
 // ป้าย/สี/ไอคอนชุดเดียวกับหน้า "คำสั่งซื้อของฉัน" ของลูกค้า ให้ตากลุ่มเดียวกัน
 const STATUS_META = {
+    awaiting_confirmation: { label: 'รอพนักงานยืนยัน', cls: 'is-pending', icon: 'pi pi-clock' },
+    cancelled: { label: 'ลูกค้ายกเลิก', cls: 'is-cancel', icon: 'pi pi-times-circle' },
+    rejected: { label: 'พนักงานปฏิเสธ', cls: 'is-cancel', icon: 'pi pi-ban' },
     pending: { label: 'รอตรวจสอบ', cls: 'is-pending', icon: 'pi pi-clock' },
     packing: { label: 'กำลังจัดสินค้า', cls: 'is-progress', icon: 'pi pi-box' },
     payment: { label: 'เตรียมนำส่ง - กำลังนำส่ง', cls: 'is-progress', icon: 'pi pi-send' },
@@ -117,6 +122,7 @@ function formatDate(isoDate) {
 const detailVisible = ref(false);
 const detailOrder = ref(null);
 const detailItems = ref([]);
+const detailUnmapped = ref([]);
 const detailLoading = ref(false);
 const detailTotalItems = ref(0);
 const detailPage = ref(1);
@@ -126,6 +132,7 @@ async function openDetail(order) {
     detailOrder.value = order;
     detailVisible.value = true;
     detailItems.value = [];
+    detailUnmapped.value = [];
     detailTotalItems.value = 0;
     detailPage.value = 1;
     await loadDetailItems();
@@ -139,6 +146,7 @@ async function loadDetailItems(append = false) {
         const res = await AdminOrderService.getOrderDetail(detailOrder.value.cust_code, detailOrder.value.doc_no, nextPage, DETAIL_PAGE_SIZE);
         const body = res?.data || {};
         const batch = body?.data?.items || [];
+        detailUnmapped.value = body?.data?.unmapped_items || [];
         detailItems.value = append ? [...detailItems.value, ...batch] : batch;
         detailPage.value = nextPage;
         detailTotalItems.value = Number(body?.paging?.total_items ?? detailItems.value.length);
@@ -262,7 +270,7 @@ function applyFilters() {
 function clearFilters() {
     draft.value = { search: '', dateFrom: '', dateTo: '' };
     applied.value = { search: '', dateFrom: '', dateTo: '' };
-    statusTab.value = 'pending';
+    statusTab.value = '';
     page.value = 1;
     load();
 }
@@ -394,6 +402,7 @@ onBeforeUnmount(() => {
                     <div class="aoc__head-left">
                         <i class="pi pi-shopping-bag aoc__doc-icon"></i>
                         <button type="button" class="aoc__doc" @click="openDetail(order)">{{ order.doc_no }}</button>
+                        <span v-if="order.mpr_doc_no && order.qt_doc_nos?.length" class="text-xs text-gray-500 break-all">QT: {{ order.qt_doc_nos.join(', ') }}</span>
                         <span v-if="order.emp_name || order.emp_code" class="aoc__emp"><i class="pi pi-user"></i> {{ order.emp_name || order.emp_code }}</span>
                         <span v-if="Number(order.cancelled_doc_count) > 0 && order.status !== 'cancel'" class="aoc__partial-cancel">
                             <i class="pi pi-exclamation-triangle"></i> ยกเลิกบางเอกสาร {{ order.cancelled_doc_count }}/{{ order.sub_doc_count }} ใบ
@@ -439,6 +448,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <!-- ท้ายการ์ด: ปุ่มแบบเดียวกับหน้าลูกค้า -->
+                <div v-if="order.reason" class="px-4 py-2 text-sm text-red-600">{{ order.reason }}</div>
                 <div class="aoc__foot">
                     <button type="button" class="aoc-btn aoc-btn--outline" @click="openDetail(order)">รายละเอียด</button>
                 </div>
@@ -452,6 +462,8 @@ onBeforeUnmount(() => {
                 <div class="aod__band">
                     <div>
                         <div class="aod__doc">{{ detailOrder.doc_no }}</div>
+                        <div v-if="detailOrder.mpr_doc_no && detailOrder.qt_doc_nos?.length" class="text-xs break-all">QT: {{ detailOrder.qt_doc_nos.join(', ') }}</div>
+                        <div v-if="detailOrder.reason" class="text-sm text-red-600">{{ detailOrder.reason }}</div>
                         <div class="aod__date">{{ formatDate(detailOrder.doc_date) }} {{ detailOrder.doc_time }}</div>
                     </div>
                     <div class="aod__band-right">
@@ -498,7 +510,8 @@ onBeforeUnmount(() => {
                                     </td>
                                     <td class="aod-right"><b :class="{ 'aod__struck': g.cancelled }">฿{{ formatMoney(g.subtotal) }}</b></td>
                                 </tr>
-                                <tr v-for="(it, idx) in g.items" :key="g.doc_no + '-' + idx" :class="{ 'aod__row-cancelled': g.cancelled }">
+                                <template v-for="(it, idx) in g.items" :key="g.doc_no + '-' + (it.line_number ?? idx)">
+                                <tr :class="{ 'aod__row-cancelled': g.cancelled }">
                                     <td>
                                         <span class="aod__item-name">{{ it.item_name }}</span>
                                         <span class="aod__item-code">รหัส: {{ it.item_code }}
@@ -512,6 +525,7 @@ onBeforeUnmount(() => {
                                         <span v-else-if="it.ship_state === 'partial'" :class="['aod__notship', { 'is-removed': detailSettled }]">
                                             จัดลงบิล {{ Number(it.shipped_qty) }} จาก {{ Number(it.qty) }}
                                         </span>
+                                        <span v-else-if="it.ship_state === 'unknown'" class="aod__notship">รอตรวจสอบความคืบหน้ารายการ</span>
                                         </span>
                                     </td>
                                     <td>{{ it.unit_code }}</td>
@@ -519,6 +533,23 @@ onBeforeUnmount(() => {
                                     <td class="aod-right">{{ Number(it.qty).toLocaleString('th-TH') }}</td>
                                     <td class="aod-right"><b>฿{{ formatMoney(it.sum_amount) }}</b></td>
                                 </tr>
+                                <tr v-for="child in it.sub_item || []" :key="'set-' + child.line_number" class="bg-purple-50">
+                                    <td class="pl-6">↳ {{ child.item_name }} <small>{{ child.item_code }}</small></td>
+                                    <td>{{ child.unit_code }}</td><td></td><td class="aod-right">{{ Number(child.qty) }}</td><td></td>
+                                </tr>
+                                <tr v-for="allocation in it.qt_allocations || []" :key="allocation.doc_no + '-' + allocation.line_number" class="bg-emerald-50" data-testid="qt-allocation">
+                                    <td class="pl-6">
+                                        <span class="aod__item-name">↳ {{ allocation.item_name }}</span>
+                                        <span class="aod__item-code">{{ allocation.item_code }} · QT {{ allocation.doc_no }}</span>
+                                        <span class="aod__item-code">คลัง {{ allocation.wh_code || '-' }} / ที่เก็บ {{ allocation.shelf_code || '-' }}</span>
+                                        <div v-for="component in allocation.sub_item || []" :key="component.line_number" class="text-xs pl-4 mt-1">
+                                            {{ component.item_code }} · {{ component.item_name }} × {{ Number(component.qty) }} {{ component.unit_code }} · {{ component.wh_code }} / {{ component.shelf_code }}
+                                        </div>
+                                    </td>
+                                    <td>{{ allocation.unit_code }}</td><td class="aod-right">฿{{ formatMoney(allocation.price) }}</td>
+                                    <td class="aod-right">{{ Number(allocation.qty) }}</td><td class="aod-right">฿{{ formatMoney(allocation.sum_amount) }}</td>
+                                </tr>
+                                </template>
                             </template>
                         </tbody>
                     </table>
@@ -526,6 +557,14 @@ onBeforeUnmount(() => {
                 <div v-if="detailHasMore" class="aod__more">
                     <Button label="โหลดเพิ่มเติม" icon="pi pi-angle-down" text size="small" :loading="detailLoading" @click="loadDetailItems(true)" />
                 </div>
+                <section v-if="detailUnmapped.length" class="p-3 mt-3 border border-amber-300 rounded bg-amber-50">
+                    <h3 class="font-semibold">รายการที่ไม่พบความสัมพันธ์กับ MPR</h3>
+                    <p class="text-sm">แสดงเพื่ออ้างอิง ไม่รวมซ้ำในยอดคำขอ</p>
+                    <div v-for="item in detailUnmapped" :key="item.doc_no + '-' + item.line_number" class="mt-2 text-sm">
+                        {{ item.item_code }} · {{ item.item_name }} × {{ Number(item.qty) }} {{ item.unit_code }}
+                        · QT {{ item.doc_no }} · {{ item.wh_code }} / {{ item.shelf_code }}
+                    </div>
+                </section>
 
                 <!-- สรุปภาษี -->
                 <div class="aod__sum">
@@ -1318,5 +1357,21 @@ onBeforeUnmount(() => {
     font-size: 0.82rem;
     padding: 0 0.5rem;
     white-space: nowrap;
+}
+@media (max-width: 640px) {
+    .aod__band { flex-wrap: wrap; gap: 0.75rem; }
+    .aod__table { display: block; min-width: 0; }
+    .aod__table thead { display: none; }
+    .aod__table tbody { display: block; }
+    .aod__table tbody tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0.65rem; border-bottom: 1px solid #dbe5e0; }
+    .aod__table td { display: block; border: 0; padding: 0.3rem; font-size: 0.82rem; text-align: left; overflow-wrap: anywhere; }
+    .aod__table td:first-child { grid-column: 1 / -1; }
+    .aod__table td:nth-child(2)::before { content: 'หน่วย'; }
+    .aod__table td:nth-child(3)::before { content: 'ราคา'; }
+    .aod__table td:nth-child(4)::before { content: 'จำนวน'; }
+    .aod__table td:nth-child(5)::before { content: 'รวม'; }
+    .aod__table td::before { display: block; color: #64748b; font-size: 0.72rem; }
+    .aod__table tr[data-testid='qt-allocation'] { margin-left: 0.65rem; border-left: 3px solid #9dd4b5; }
+    .aod__table .aod__doc-row td { grid-column: 1 / -1; }
 }
 </style>

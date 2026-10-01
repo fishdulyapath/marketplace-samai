@@ -33,7 +33,7 @@ const os = require('node:os');
             let rejection = '';
             let stockValidations = 0;
             let cleared = false;
-            let optionCalls = 0, shelfCalls = 0, confirmCalls = 0;
+            let optionCalls = 0, shelfCalls = 0;
             const item = { line_number: 1, item_code: 'P1', item_name: 'สินค้าทดสอบ', qty: 2, unit_code: 'ชิ้น', price: 100, sum_amount: 200, wh_code: '', shelf_code: '', sub_item: [] };
             const row = () => ({ doc_no: 'MPR260929000001', cust_code: 'C1', cust_name: 'ลูกค้าทดสอบ', total_amount: 200, doc_date: '2026-09-29', doc_time: '10:30', status: state, reason: rejection });
             await page.route('**/*', async route => {
@@ -68,20 +68,18 @@ const os = require('node:os');
                     if (scenario === 'unknown-stock') { body.data.stock_error = 'อ่านสต๊อกไม่สำเร็จ'; body.data.options.forEach(option => { option.balance_qty = null; option.locations = []; }); }
                 } else if (endpoint.endsWith('/confirm')) {
                     if (scenario === 'conflict') { state = 'cancelled'; return route.fulfill({ status: 409, json: { message: 'ลูกค้ายกเลิกคำขอนี้แล้ว' } }); }
-                    if (confirmCalls++ === 0 && scenario.startsWith('split')) return route.fulfill({ status: 422, json: {
-                        success: false, code: 'INSUFFICIENT_STOCK', message: 'สต๊อกไม่พอ ณ คลัง/ที่เก็บที่เลือก ยังไม่สร้าง QT กรุณาแก้ไขการจัดสรร',
-                        stock_issues: [{ item_code: 'P1-A', wh_code: 'W2', shelf_code: 'S2', required_qty: 1, available_qty: 0 }],
-                    } });
-                    if (confirmCalls === 1 && scenario === 'unknown-stock') return route.fulfill({ status: 503, json: {
-                        success: false, code: 'STOCK_UNAVAILABLE', message: 'ตรวจสอบสต๊อกไม่สำเร็จ ยังไม่สร้าง QT กรุณาลองใหม่', stock_issues: [],
-                    } });
-                    // A later attempt simulates physical stock replenishment / ERP recovery.
                     submitted = route.request().postDataJSON(); state = 'confirmed';
                     body = { success: true, doc_no: 'MQT-TEST', sub_doc_nos: ['MQT-TEST'] };
                 } else if (endpoint.endsWith('/reject')) {
                     submitted = route.request().postDataJSON(); rejection = submitted.reason; state = 'rejected';
                 } else if (endpoint.endsWith('/cancel')) {
                     state = 'cancelled';
+                } else if (endpoint === '/getOrderHistory' || endpoint === '/getOrderHeader') {
+                    const order = { ...row(), order_kind: 'mpr', mpr_doc_no: row().doc_no, qt_doc_nos: [],
+                        request_status: state, status: state === 'pending' ? 'awaiting_confirmation' : state, can_cancel: state === 'pending' };
+                    body = { success: true, data: endpoint === '/getOrderHistory' ? [order] : order, total_orders: 1 };
+                } else if (endpoint === '/getOrderDetail') {
+                    body = { success: true, data: { items: [item] }, paging: { page: 1, page_size: 10, total_items: 1, total_pages: 1 } };
                 } else if (endpoint === '/admin/pending-orders' || endpoint === '/pending-orders') {
                     const rows = state === 'confirmed' || (admin && state !== 'pending') ? [] : [row()];
                     body = { success: true, data: rows, total: rows.length, page: 1, page_size: 20 };
@@ -100,7 +98,7 @@ const os = require('node:os');
             });
             await page.goto(`${base}/${scenario === 'zero-stock-product' ? 'product-detail/P1' : admin ? 'admin/pending-orders' : 'orders-history'}`);
             if (scenario === 'checkout') {
-                await page.getByRole('button', { name: 'ดูรายละเอียด', exact: true }).first().waitFor();
+                await page.getByRole('button', { name: 'รายละเอียด', exact: true }).first().waitFor();
                 const result = await page.evaluate(async () => {
                     const { useCartStore } = await import('/src/stores/cartStore.js');
                     const cart = useCartStore();
@@ -134,7 +132,7 @@ const os = require('node:os');
                 continue;
             }
             if (admin) await page.getByRole('button', { name: /MPR260929000001/ }).click();
-            else await page.getByRole('button', { name: 'ดูรายละเอียด', exact: true }).first().click();
+            else await page.getByRole('button', { name: 'รายละเอียด', exact: true }).first().click();
             const detail = admin ? page.getByRole('region', { name: 'พื้นที่จัดสินค้า', exact: true }) : page.getByRole('dialog').first();
             await detail.getByText('สินค้าทดสอบ', { exact: true }).first().waitFor();
             if (scenario.startsWith('split')) {
@@ -155,17 +153,14 @@ const os = require('node:os');
                 await editor.getByRole('button', { name: 'เพิ่มรายการจัดสรร', exact: true }).click();
                 assert.equal(await editor.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).isDisabled(), true);
                 await editor.getByRole('button', { name: 'ลบรายการ 3', exact: true }).click();
-                assert.equal(await editor.getByText(/ไม่พอ กรุณาเปลี่ยนการจัดสรร/).count(), 1);
+                assert.equal(await editor.getByText(/ไม่พอ · ยังยืนยันได้ แต่ควรตรวจสอบก่อน/).count(), 1);
+                assert.equal(await editor.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).isDisabled(), true, 'Must finish this line explicitly before reviewing');
+                await editor.getByRole('button', { name: 'เสร็จและถัดไป', exact: true }).click();
+                assert.equal(await page.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).isDisabled(), false);
                 assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'No horizontal overflow');
                 await page.screenshot({ path: path.join(process.env.PENDING_SCREENSHOT_DIR || os.tmpdir(), `samai-${scenario}.png`), fullPage: true, animations: 'disabled' });
                 await detail.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).click();
                 await page.getByRole('dialog').last().getByText(/→ P1-A/).waitFor();
-                await page.getByRole('dialog').last().getByRole('button', { name: 'ยืนยันสั่งซื้อ', exact: true }).click();
-                await page.getByRole('list', { name: 'สินค้าสต๊อกไม่พอ' }).getByText(/P1-A.*W2.*S2.*ต้องการ 1.*คงเหลือ 0/).waitFor();
-                assert.equal(state, 'pending');
-                assert.equal(await detail.getByRole('spinbutton').count(), 2, 'Shortage keeps allocations for correction');
-                assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-                await detail.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).click();
                 await page.getByRole('dialog').last().getByRole('button', { name: 'ยืนยันสั่งซื้อ', exact: true }).click();
                 await page.getByText('ยืนยันแล้ว เลขที่คำสั่งซื้อ MQT-TEST', { exact: true }).waitFor();
                 assert.deepEqual(submitted, { allocations: ['P1-A', 'P1-B'].map(item_code => ({ line_number: 1, item_code, qty: 1, wh_code: 'W2', shelf_code: 'S2' })) });
@@ -183,7 +178,10 @@ const os = require('node:os');
                 await detail.getByRole('combobox', { name: 'ที่เก็บจัดสรร 1', exact: true }).click();
                 await page.getByRole('option', { name: 'S2 — ที่เก็บสินค้า', exact: true }).click();
                 await page.waitForFunction(() => !document.querySelector('.p-select-overlay:not(.p-connected-overlay-leave-active)'));
-                if (scenario === 'unknown-stock') await detail.getByText('ยังไม่ทราบยอด · ต้องตรวจสต๊อกสำเร็จก่อนสร้าง QT', { exact: true }).waitFor();
+                if (scenario === 'unknown-stock') await detail.getByText('ยังไม่ทราบยอด · ยังยืนยันได้ แต่ควรตรวจสอบก่อน', { exact: true }).waitFor();
+                assert.equal(await detail.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).isDisabled(), true, 'A valid allocation still needs explicit completion');
+                await detail.getByRole('button', { name: 'เสร็จและถัดไป', exact: true }).click();
+                assert.equal(await page.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).isDisabled(), false, 'Stock warnings do not block a completed allocation');
                 await page.screenshot({ path: path.join(process.env.PENDING_SCREENSHOT_DIR || os.tmpdir(), 'samai-pending-admin.png'), fullPage: true, animations: 'disabled' });
                 await detail.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).click();
                 await page.getByRole('dialog').last().getByRole('button', { name: 'ยืนยันสั่งซื้อ', exact: true }).click();
@@ -191,13 +189,6 @@ const os = require('node:os');
                     await page.getByText('ลูกค้ายกเลิกคำขอนี้แล้ว', { exact: true }).waitFor();
                     assert.equal(await page.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).count(), 0);
                     assert.deepEqual(errors, []); results.push(`${scenario}: passed`); await context.close(); continue;
-                }
-                if (scenario === 'unknown-stock') {
-                    await page.getByText('ตรวจสอบสต๊อกไม่สำเร็จ ยังไม่สร้าง QT กรุณาลองใหม่', { exact: true }).waitFor();
-                    assert.equal(state, 'pending');
-                    assert.equal(await detail.getByRole('spinbutton').inputValue(), '2');
-                    await detail.getByRole('button', { name: 'ตรวจสอบและยืนยัน', exact: true }).click();
-                    await page.getByRole('dialog').last().getByRole('button', { name: 'ยืนยันสั่งซื้อ', exact: true }).click();
                 }
                 await page.getByText('ยืนยันแล้ว เลขที่คำสั่งซื้อ MQT-TEST', { exact: true }).waitFor();
                 assert.deepEqual(submitted, { allocations: [{ line_number: 1, item_code: 'P1', qty: 2, wh_code: 'W2', shelf_code: 'S2' }] });
@@ -213,8 +204,8 @@ const os = require('node:os');
                 assert.equal(await detail.getByRole('combobox').count(), 0);
                 await page.waitForTimeout(250); // Allow the PrimeVue entrance transition to finish.
                 await page.screenshot({ path: path.join(process.env.PENDING_SCREENSHOT_DIR || os.tmpdir(), 'samai-pending-customer-mobile.png'), fullPage: true, animations: 'disabled' });
-                await detail.getByRole('button', { name: 'ยกเลิกคำขอ', exact: true }).click();
-                await page.getByRole('dialog').last().getByRole('button', { name: 'ยกเลิกคำขอ', exact: true }).click();
+                await detail.getByRole('button', { name: 'ยกเลิกคำสั่งซื้อ', exact: true }).click();
+                await page.getByRole('dialog').last().getByRole('button', { name: 'ยืนยัน', exact: true }).click();
                 await page.getByText('ยกเลิกคำขอแล้ว', { exact: true }).waitFor();
                 assert.equal(state, 'cancelled');
             }

@@ -1838,7 +1838,7 @@ paths:
       tags: [Order]
       security: [{ BearerAuth: [] }]
       summary: ยืนยันสร้าง QT/30 (employee + admin.orders)
-      description: Uses persisted commercial data. Normal lines may split across physical codes whose name_eng_2 matches the source code, or keep the original. Quantities must sum to the source, with compatible units and tax. Set lines cannot split or change code. Rechecks physical stock at each allocated warehouse/shelf before writing any QT, aggregating base-unit demand across all lines, gifts and expanded set components. Insufficient or unavailable stock blocks confirmation, not customer submission. This is a balance check, not a stock reservation. sale_code comes only from employee token. Serialized with cancellation/rejection. Legacy allocations without item_code and qty retain the original code/full quantity.
+      description: Uses persisted commercial data. Normal lines may split across physical codes whose name_eng_2 matches the source code, or keep the original. Quantities must sum to the source, with compatible units and tax. Set lines cannot split or change code. Staff receives physical-stock warnings in the allocation workspace, but a shortage or unavailable balance does not block QT creation. sale_code comes only from employee token. Serialized with cancellation/rejection. Legacy allocations without item_code and qty retain the original code/full quantity.
       requestBody:
         required: true
         content:
@@ -1863,8 +1863,6 @@ paths:
         '400': { description: Missing allocation or invalid master warehouse/shelf relationship }
         '403': { description: Employee token and admin.orders required }
         '409': { description: Request closed or QT number unavailable }
-        '422': { description: 'INSUFFICIENT_STOCK; success=false, message, code, stock_issues containing item_code, wh_code, shelf_code, required_qty and available_qty in base units. Request remains pending.' }
-        '503': { description: 'STOCK_UNAVAILABLE; unable to verify stock or unit conversion. No QT written; keep the draft and retry.' }
 
   /admin/pending-orders/{docNo}/reject:
     parameters:
@@ -1964,19 +1962,23 @@ paths:
       tags: [Order]
       summary: ประวัติออเดอร์ของลูกค้า
       description: |
-        เฉพาะ QT ที่ doc_no มี 'MQT' — max 40 รายการล่าสุด
-
-        **Status logic**:
-        - `partial` filter ใน app layer (status=success AND balance>0)
-        - `success` filter ใน app layer (success AND balance=0)
-        - อื่นๆ filter ใน SQL
+        ไม่ระบุ view คง QT history เดิม; view=mpr รวม lifecycle ทั้งหมดเป็นหนึ่งการ์ดต่อ MPR
+        รวม QT ที่ผูกไว้ก่อนกรองสถานะและแบ่งหน้า และคง QT เก่าที่ไม่มี MPR
+        view=mpr ต้องมี Bearer token ลูกค้าเจ้าของเอกสาร หรือพนักงานที่มี admin.orders
+        วันที่/ยอดเงินเป็นต้นฉบับ MPR; สถานะและยอดเรียกเก็บมาจาก QT/SO/INV
       parameters:
+        - { name: view, in: query, schema: { type: string, enum: [mpr] } }
+        - { name: search, in: query, schema: { type: string }, description: "MPR/QT/ลูกค้า/สินค้าต้นฉบับ; ใช้กับ view=mpr" }
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to, in: query, schema: { type: string, format: date } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 40 } }
         - { name: cust_code, in: query, required: true, schema: { type: string }, example: "C00001" }
         - name: status
           in: query
           schema:
             type: string
-            enum: [pending, packing, payment, success, partial, cancel]
+            enum: [awaiting_confirmation, cancelled, rejected, pending, packing, payment, success, cancel]
           description: Filter by order status (optional)
       responses:
         '200':
@@ -2001,6 +2003,7 @@ paths:
       tags: [Order]
       summary: ข้อมูล header ของออเดอร์เดี่ยว
       parameters:
+        - { name: view, in: query, schema: { type: string, enum: [mpr] }, description: "อ่าน MPR หรือ QT alias ภายใต้ verified token; ไม่เปลี่ยนเลข ERP สำหรับทำรายการ" }
         - { name: cust_code, in: query, required: true, schema: { type: string }, example: "C00001" }
         - { name: doc_no,    in: query, required: true, schema: { type: string }, example: "MQT2401150001" }
       responses:
@@ -2030,7 +2033,9 @@ paths:
         สินค้าชุด (item_type="3") จะมี `sub_item` array
 
         `q` ค้นทั้ง parent และ sub_item ของ Set
+        view=mpr คืนสินค้าต้นฉบับ 300 เท่านั้น ไม่ส่ง qt_allocations ให้ลูกค้า
       parameters:
+        - { name: view, in: query, schema: { type: string, enum: [mpr] } }
         - { name: cust_code,  in: query, required: true, schema: { type: string },                        example: "C00001" }
         - { name: doc_no,     in: query, required: true, schema: { type: string },                        example: "MQT2401150001" }
         - { name: page,       in: query,                 schema: { type: integer, default: 1 } }
@@ -2058,6 +2063,38 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/orders:
+    get:
+      tags: [Order]
+      summary: คำสั่งซื้อหลังบ้าน (admin.orders)
+      parameters:
+        - { name: view, in: query, schema: { type: string, enum: [mpr] } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to, in: query, schema: { type: string, format: date } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 40, maximum: 200 } }
+      responses:
+        '200': { description: "data, total_orders, status_counts, page_amount; MPR เป็นหลักเมื่อ view=mpr" }
+        '401': { description: ต้องมี verified token สำหรับ view=mpr }
+        '403': { description: ต้องมีสิทธิ์ admin.orders }
+
+  /admin/orders/{orderNo}/items:
+    get:
+      tags: [Order]
+      summary: สินค้า MPR พร้อมรายการ QT ย่อย (verified employee และ admin.orders)
+      parameters:
+        - { name: orderNo, in: path, required: true, schema: { type: string } }
+        - { name: cust_code, in: query, schema: { type: string }, description: ต้องระบุสำหรับ legacy QT ที่ไม่มี MPR }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        '200': { description: "data.items เป็น MPR roots แต่ละรายการมี qt_allocations; data.unmapped_items แยก QT ที่จับคู่ไม่ได้; paging นับเฉพาะ roots" }
+        '401': { description: ต้องเข้าสู่ระบบ }
+        '403': { description: ต้องเป็นพนักงานที่มี admin.orders }
 
   # ─── CUSTOMER ────────────────────────────────────────────────────────────────
 

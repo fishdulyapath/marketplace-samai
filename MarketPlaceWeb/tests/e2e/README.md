@@ -18,13 +18,18 @@ node tests/e2e/workspace-benchmark.cjs
 
 Optional variables: `PENDING_BROWSER_EXECUTABLE`, `PENDING_UI_URL` (localhost only), and `PENDING_SCREENSHOT_DIR`.
 
-- `pending-orders.cjs`: actual application routes with intercepted API responses. Covers confirm/reject/customer cancel, zero-stock checkout, desktop/mobile splits, HTTP 422 shortage details and retained allocations, HTTP 503 stock failures and retry after recovery, master retry, and a 409 concurrent cancellation.
+- `pending-orders.cjs`: actual application routes with intercepted API responses. Covers confirm/reject/customer cancel, zero-stock checkout, desktop/mobile splits with visible shortage warnings that still permit confirmation, master retry, unknown stock, and a 409 concurrent cancellation.
 - `workspace.cjs`: multi-document, multi-line visual fixture at 1360, 820 and 390 pixels. Covers retained drafts, product-set restrictions, progress, review/back, manual request selection after confirmation/rejection and horizontal overflow. Successful actions refresh the queue but never open the next request automatically.
 - `workspace-speed.cjs`: quick product/location picker, keyboard Enter safety, remaining quantity, selected-line bulk assignment without overwriting existing locations, collapse/filters, risk-focused review, refresh-safe drafts, employee isolation, changed-master validation and terminal-state draft cleanup at all three widths.
 - `workspace-benchmark.cjs`: controlled comparison of manual versus bulk location assignment for 5/20/50 lines. Does not create QT documents.
 - `/tests/e2e/workspace-preview.html`: interactive development-only fixture with an explicit simulated-data banner. Service methods are replaced in this isolated entry; it never connects to ERP. This HTML is not a production build entry.
 
-The staff page uses a queue and inline allocation workspace. Customer history remains on the existing `PendingOrders` component. Drafts persist in browser localStorage for seven days, scoped to API destination and employee code. Only source fingerprint and allocation fields are stored, not contact details or credentials. Reopening reads the current document/status first, discards stale fingerprints, and revalidates products and locations. Shelf requests are shared within one open document and discarded on reopen. Storage failures retain in-memory edits and show a warning before leaving. Confirmation remains server-authoritative and requires sufficient fresh physical stock; shortage/read errors retain the draft for correction or retry. Drafts do not reserve stock or change prices. Local drafts are not encrypted server storage and do not synchronize between devices.
+The staff page uses a queue and inline allocation workspace. Customer history uses the unified MPR-first `OrderHistory` view. Drafts persist in browser localStorage for seven days, scoped to API destination and employee code. Only source fingerprint and allocation fields are stored, not contact details or credentials. Reopening reads the current document/status first, discards stale fingerprints, and revalidates products and locations. Shelf requests are shared within one open document and discarded on reopen. Storage failures retain in-memory edits and show a warning before leaving. Shortage and unknown-stock badges are advisory; confirmation does not reserve or block stock, and does not change prices. Local drafts are not encrypted server storage and do not synchronize between devices.
+
+## MPR history preview
+
+Start an isolated Vite instance on `127.0.0.1:5188` (set `VITE_APP_API=http://127.0.0.1:5188/`) and open `/tests/e2e/mpr-history-preview.html`.
+The fixture mounts the real customer/staff views with service responses replaced; no ERP connection. It seeds fixture-only customer identity on this isolated origin. Buttons switch roles and reset data. Check original products/customer privacy, four QT allocations under two MPR roots, search, pending cancellation, QT cancellation reference, reorder display codes, and 390px mobile layout. It is not a production build entry.
 
 ## Controlled benchmark (2026-09-30)
 

@@ -20,6 +20,8 @@ const { resolveDateRange } = require('../utils/adminOrderFilters');
 const { pendingIdentity } = require('../auth/pendingOrderAuth');
 const { requestMetadata } = require('../utils/pendingOrder');
 
+router.use(require('./mprOrderHistory')({ orderHistoryCte, mapOrderRow, orderRowKey, legacyOrderDetail }));
+
 // แตกรายการโปรโมชันของแถม (item_type='4') เป็นบรรทัดสินค้าจริง ตรงขอบก่อนคำนวณ/บันทึก
 // สินค้าปกติผ่านตรงๆ — ของแถมได้ price/sum_amount=0 และ is_permium=1 (บังคับซ้ำด้วย guard)
 async function expandOrderItems(client, items, ctx) {
@@ -1856,7 +1858,7 @@ router.get('/getOrderHeader', async (req, res) => {
 });
 
 // GET /service/v1/getOrderDetail
-router.get('/getOrderDetail', async (req, res) => {
+async function legacyOrderDetail(req, res) {
   const { cust_code, doc_no, page, page_size, q } = req.query;
   if (!cust_code || !doc_no) {
     return res.status(400).send('{ERROR: cust_code and doc_no are required}');
@@ -1969,6 +1971,7 @@ router.get('/getOrderDetail', async (req, res) => {
           || String(r.item_name || '').toLowerCase().includes(needle))
         .map((r) => ({
           doc_no: r.doc_no,
+          line_number: r.line_number,
           qty: r.qty,
           item_code: r.item_code,
           item_name: r.item_name,
@@ -2026,6 +2029,7 @@ router.get('/getOrderDetail', async (req, res) => {
         const it = {
           // เลขเอกสารย่อยที่บรรทัดนี้อยู่จริงใน ERP — ให้หน้าจอจัดกลุ่มตามใบได้
           doc_no: r.doc_no,
+          line_number: r.line_number,
           qty: r.qty,
           item_code: r.item_code,
           item_name: r.item_name,
@@ -2147,7 +2151,8 @@ router.get('/getOrderDetail', async (req, res) => {
   } catch (ex) {
     return res.status(400).json({ ERROR: ex.message });
   }
-});
+}
+router.get('/getOrderDetail', legacyOrderDetail);
 
 module.exports = router;
 // export เฉพาะ pure function ไว้ให้ test เรียกใช้ — ไม่กระทบ route ที่ mount ไว้ใน index.js

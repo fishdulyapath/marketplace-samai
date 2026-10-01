@@ -15,7 +15,7 @@ class AdminOrderService {
      * signal: ใช้ยกเลิกคำขอเก่าเวลาผู้ใช้กดค้นหารัวๆ หรือตอน auto refresh ซ้อนกับการกดเอง
      */
     getOrders({ search = '', dateFrom = '', dateTo = '', status = '', page = 1, pageSize = 20, signal } = {}) {
-        const params = { page, page_size: pageSize };
+        const params = { view: 'mpr', page, page_size: pageSize };
         if (search) params.search = search;
         if (status) params.status = status;
         if (dateFrom) params.date_from = dateFrom;
@@ -23,9 +23,9 @@ class AdminOrderService {
         return apiClient.get('service/v1/admin/orders', { params, signal });
     }
 
-    // รายการสินค้าในใบ — ใช้ endpoint เดียวกับหน้าลูกค้า (รับเลขหลักแล้วรวมใบย่อยให้เอง)
+    // Staff-only projection includes QT allocations; the customer endpoint never exposes them.
     getOrderDetail(custCode, docNo, page = 1, pageSize = 100) {
-        return apiClient.get('service/v1/getOrderDetail', {
+        return apiClient.get(`service/v1/admin/orders/${encodeURIComponent(docNo)}/items`, {
             params: { cust_code: custCode, doc_no: docNo, page, page_size: pageSize }
         });
     }

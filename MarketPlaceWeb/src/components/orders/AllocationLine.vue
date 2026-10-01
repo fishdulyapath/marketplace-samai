@@ -6,7 +6,7 @@ import { allocationError } from '@/utils/orderAllocations';
 import { remainingQty } from '@/utils/orderWorkspace';
 
 const props = defineProps({ source: Object, docNo: String, warehouses: Array, disabled: Boolean, collapsed: Boolean, checked: Boolean, bulkRevision: Number, shelfLoader: Function });
-const emit = defineEmits(['validity', 'health', 'toggle', 'checked', 'done']);
+const emit = defineEmits(['validity', 'health', 'toggle', 'checked', 'done', 'changed']);
 const root = ref(null);
 const pickerIndex = ref(null),
     pickerSearch = ref(''),
@@ -39,6 +39,7 @@ const validation = computed(() => {
     return '';
 });
 watch(validation, (value) => emit('validity', !value), { immediate: true });
+watch(rows, () => emit('changed'), { deep: true });
 watch(
     () => props.bulkRevision,
     () => rows.value.forEach((row) => loadShelves(row.wh_code))
@@ -249,8 +250,8 @@ onBeforeUnmount(() => {
                     <div v-if="!isSet" class="stock-strip">
                         <span class="stock-badge" :class="stockAt(row) == null ? 'unknown' : Number(stockAt(row)) < Number(row.qty) ? 'short' : 'enough'">{{
                             stockAt(row) == null
-                                ? 'ยังไม่ทราบยอด · ต้องตรวจสต๊อกสำเร็จก่อนสร้าง QT'
-                                : `ตำแหน่งที่เลือก: ${qty(stockAt(row))} ${source.unit_code}${Number(stockAt(row)) < Number(row.qty) ? ' · ไม่พอ กรุณาเปลี่ยนการจัดสรร' : ' · เพียงพอ ณ เวลาที่โหลด'}`
+                                ? 'ยังไม่ทราบยอด · ยังยืนยันได้ แต่ควรตรวจสอบก่อน'
+                                : `ตำแหน่งที่เลือก: ${qty(stockAt(row))} ${source.unit_code}${Number(stockAt(row)) < Number(row.qty) ? ' · ไม่พอ · ยังยืนยันได้ แต่ควรตรวจสอบก่อน' : ' · เพียงพอ ณ เวลาที่โหลด'}`
                         }}</span>
                         <details v-if="optionFor(row)">
                             <summary>สต๊อกจริงรวม {{ qty(optionFor(row).balance_qty) }} {{ source.unit_code }} · ดูตำแหน่ง</summary>

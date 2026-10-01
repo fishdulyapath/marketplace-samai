@@ -58,7 +58,8 @@ const error = ref(''),
     selected = ref(null);
 const stockIssues = ref([]);
 const warehouses = ref([]),
-    validLines = ref({});
+    validLines = ref({}),
+    doneLines = ref({});
 const action = ref(''),
     reason = ref('');
 const drafts = new Map();
@@ -66,8 +67,15 @@ let listVersion = 0,
     detailVersion = 0;
 const money = (value) => Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const messageOf = (err) => err?.response?.data?.message || err.message || 'ดำเนินการไม่สำเร็จ';
-const completed = computed(() => selected.value?.items.filter((item) => validLines.value[item.line_number]).length || 0);
+const validCount = computed(() => selected.value?.items.filter((item) => validLines.value[item.line_number]).length || 0);
+const completed = computed(() => selected.value?.items.filter((item) => validLines.value[item.line_number] && doneLines.value[item.line_number]).length || 0);
 const canConfirm = computed(() => selected.value?.status === 'pending' && selected.value.items.length > 0 && completed.value === selected.value.items.length && !busy.value && !opening.value);
+const completionMessage = computed(() => {
+    const count = selected.value?.items.length || 0;
+    if (!count || validCount.value < count) return 'กรุณาจัดสรรสินค้า คลัง และที่เก็บให้ครบทุกบรรทัดก่อน';
+    if (completed.value < count) return `กรุณากด “เสร็จและถัดไป” ให้ครบอีก ${count - completed.value} รายการก่อนตรวจสอบ`;
+    return '';
+});
 const hasDraft = () => [...drafts.values()].some((doc) => doc.items.some((item) => JSON.stringify(item.allocations) !== item.initialAllocation));
 function beforeUnload(event) {
     if (storageFailed.value && hasDraft()) {
@@ -96,6 +104,9 @@ watch(
         draftStore = undefined;
         selected.value = null;
         drafts.clear();
+        validLines.value = {};
+        doneLines.value = {};
+        healthLines.value = {};
         initDraftStore();
     }
 );
@@ -121,7 +132,7 @@ function persistDraft(doc) {
     }
 }
 watch(selected, persistDraft, { deep: true, flush: 'sync' });
-const matchesFilter = (item) => filter.value === 'all' || (filter.value === 'incomplete' ? !validLines.value[item.line_number] : healthLines.value[item.line_number]?.short);
+const matchesFilter = (item) => filter.value === 'all' || (filter.value === 'incomplete' ? !doneLines.value[item.line_number] : healthLines.value[item.line_number]?.short);
 const visibleCount = computed(() => selected.value?.items.filter(matchesFilter).length || 0);
 const riskReasons = (item) =>
     [
@@ -133,15 +144,10 @@ const riskReasons = (item) =>
 const reviewRisk = computed(() => selected.value?.items.filter((item) => riskReasons(item).length) || []);
 const reviewNormal = computed(() => selected.value?.items.filter((item) => !riskReasons(item).length) || []);
 const bulkTargets = computed(() => unassignedRows(selected.value?.items || [], bulkMode.value === 'selected' ? checkedLines.value : undefined));
-function collapseReady() {
-    selected.value?.items.forEach((item) => {
-        if (validLines.value[item.line_number]) folded.value[item.line_number] = true;
-    });
-}
 async function nextIncomplete(after) {
     const items = selected.value?.items || [];
     const index = items.findIndex((item) => item.line_number === after);
-    const next = [...items.slice(index + 1), ...items.slice(0, index + 1)].find((item) => !validLines.value[item.line_number]);
+    const next = [...items.slice(index + 1), ...items.slice(0, index + 1)].find((item) => !doneLines.value[item.line_number]);
     if (!next) {
         notice.value = 'จัดสรรครบแล้ว พร้อมตรวจสอบและยืนยัน';
         return;
@@ -154,8 +160,14 @@ async function nextIncomplete(after) {
     component?.focusEditor();
 }
 function doneLine(item) {
+    doneLines.value[item.line_number] = true;
     folded.value[item.line_number] = true;
     nextIncomplete(item.line_number);
+}
+function markLineChanged(item) {
+    if (!doneLines.value[item.line_number]) return;
+    doneLines.value[item.line_number] = false;
+    folded.value[item.line_number] = false;
 }
 function openBulk() {
     bulkMode.value = checkedLines.value.length ? 'selected' : 'all';
@@ -251,6 +263,7 @@ async function open(row) {
         drafts.set(row.doc_no, fresh);
         // Force fresh master validation when reopening a locally retained draft.
         validLines.value = {};
+        doneLines.value = {};
         healthLines.value = {};
         folded.value = {};
         checkedLines.value = [];
@@ -322,7 +335,6 @@ onBeforeUnmount(() => {
     <section class="staff-orders" aria-label="คำขอรอดำเนินการ">
         <header class="workspace-title">
             <div>
-                <span class="overline">ORDER WORKSPACE</span>
                 <h1>
                     รอดำเนินการ <span class="count">{{ total }}</span>
                 </h1>
@@ -407,7 +419,6 @@ onBeforeUnmount(() => {
                         "
                     />
                 </nav>
-                <p class="draft-note">ร่างเก็บในเครื่องนี้ แยกตามพนักงาน 7 วัน<br />เปิดใหม่จะตรวจ master อีกครั้ง · ไม่ใช่การจองสินค้า</p>
             </aside>
             <section class="order-work" aria-label="พื้นที่จัดสินค้า" :aria-busy="opening">
                 <p v-if="opening" class="empty-state" role="status">กำลังเปิดคำขอ…</p>
@@ -415,7 +426,6 @@ onBeforeUnmount(() => {
                     <Button class="back-to-queue" label="กลับไปคิวคำขอ" icon="pi pi-arrow-left" text :disabled="busy" @click="selected = null" />
                     <header class="document-heading">
                         <div>
-                            <span class="overline">คำขอ MPR / 300</span>
                             <h2>{{ selected.cust_name || selected.cust_code }}</h2>
                             <p>{{ selected.doc_no }} · {{ displayDate(selected.doc_date) }} {{ selected.doc_time }}</p>
                         </div>
@@ -432,7 +442,7 @@ onBeforeUnmount(() => {
                         </div>
                         <progress :value="completed" :max="selected.items.length || 1" :aria-label="`จัดสรรครบ ${completed} จาก ${selected.items.length} รายการ`" />
                     </div>
-                    <p class="stock-note"><i class="pi pi-info-circle" /> ตรวจสต๊อกจริงตามคลัง/ที่เก็บอีกครั้งก่อนสร้าง QT ต้องมีพอทุกสินค้า รวมของแถมและส่วนประกอบชุด · ราคา ส่วนลด และภาษีคงเดิม</p>
+                    <p v-if="completionMessage" class="completion-note" role="status"><i class="pi pi-info-circle" /> {{ completionMessage }}</p>
                     <p v-if="draftMessage" class="draft-status" :class="{ 'save-error': storageFailed }" role="status">{{ draftMessage }}</p>
                     <div class="work-toolbar">
                         <div class="filter-tabs" aria-label="กรองรายการ">
@@ -450,8 +460,6 @@ onBeforeUnmount(() => {
                                 {{ tab.label }}
                             </button>
                         </div>
-                        <Button label="ไปยังรายการที่ยังไม่ครบ" icon="pi pi-arrow-down" text size="small" :disabled="busy || completed === selected.items.length" @click="nextIncomplete()" />
-                        <Button label="ยุบรายการที่ครบ" icon="pi pi-angle-up" text size="small" :disabled="busy || !completed" @click="collapseReady" />
                         <Button label="จัดคลังหลายรายการ" icon="pi pi-map-marker" outlined size="small" :disabled="busy" @click="openBulk" />
                     </div>
                     <p v-if="!visibleCount" class="empty-state">ไม่มีรายการในตัวกรองนี้ <Button label="แสดงทั้งหมด" text @click="filter = 'all'" /></p>
@@ -480,6 +488,7 @@ onBeforeUnmount(() => {
                                 }
                             "
                             @health="(value) => (healthLines[item.line_number] = value)"
+                            @changed="markLineChanged(item)"
                             @done="doneLine(item)"
                             @validity="(valid) => (validLines[item.line_number] = valid)"
                         />
@@ -526,8 +535,7 @@ onBeforeUnmount(() => {
         >
             <p>{{ selected?.doc_no }} · {{ selected?.cust_name }}</p>
             <template v-if="action === 'confirm'"
-                ><p>สร้าง QT จากรายการต่อไปนี้ โดยเก็บคำขอต้นฉบับไว้ตรวจสอบย้อนหลัง</p>
-                <h3 v-if="reviewRisk.length">ตรวจเป็นพิเศษ {{ reviewRisk.length }} รายการ</h3>
+                ><h3 v-if="reviewRisk.length">ตรวจเป็นพิเศษ {{ reviewRisk.length }} รายการ</h3>
                 <div v-for="item in reviewRisk" :key="item.line_number" class="review-line review-risk">
                     <strong>{{ item.item_code }} · {{ item.item_name }}</strong>
                     <p class="risk-label">{{ riskReasons(item).join(' · ') }}</p>
@@ -540,8 +548,7 @@ onBeforeUnmount(() => {
                         <p v-for="(row, index) in item.allocations" :key="index">→ {{ row.item_code }} × {{ row.qty }} {{ item.unit_code }} · {{ row.wh_code }} / {{ row.shelf_code }}</p>
                     </div>
                 </details>
-                <p class="review-total">ยอดรวม ฿{{ money(selected?.total_amount) }}</p>
-                <p>ระบบจะตรวจสต๊อกล่าสุดอีกครั้ง หากไม่พอหรืออ่านยอดไม่ได้ จะไม่สร้าง QT และเก็บร่างให้แก้ไขต่อ</p></template
+                <p class="review-total">ยอดรวม ฿{{ money(selected?.total_amount) }}</p></template
             >
             <label v-else class="reject-reason">เหตุผลที่แจ้งลูกค้า<Textarea v-model="reason" rows="4" maxlength="1000" autofocus /><small>จำเป็นต้องระบุเหตุผลก่อนปฏิเสธ</small></label>
             <template #footer
@@ -907,6 +914,12 @@ onBeforeUnmount(() => {
     font-size: 0.75rem;
     color: #738277;
     margin: 1rem 0;
+}
+.completion-note {
+    margin: -0.5rem 0 1rem;
+    color: #97551c;
+    font-size: 0.8rem;
+    font-weight: 600;
 }
 .allocation-lines {
     display: flex;

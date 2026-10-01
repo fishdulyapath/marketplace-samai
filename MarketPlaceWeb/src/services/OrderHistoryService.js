@@ -13,9 +13,13 @@ function apiBaseUrl() {
 
 class OrderHistoryService {
     // ดึงประวัติการสั่งซื้อตาม customer code
-    async getOrderHistory(custCode, status = '', page = 1, pageSize = 40) {
+    async getOrderHistory(custCode, status = '', page = 1, pageSize = 40, filters = {}) {
         return apiClient.get('service/v1/getOrderHistory', {
             params: {
+                view: 'mpr',
+                search: filters.search || '',
+                date_from: filters.dateFrom || '',
+                date_to: filters.dateTo || '',
                 cust_code: custCode,
                 status: status,
                 page: page,
@@ -28,6 +32,7 @@ class OrderHistoryService {
     async getOrderHeader(custCode, docNo) {
         return apiClient.get('service/v1/getOrderHeader', {
             params: {
+                view: 'mpr',
                 cust_code: custCode,
                 doc_no: docNo
             }
@@ -37,6 +42,7 @@ class OrderHistoryService {
     // ดึงรายการสินค้าในคำสั่งซื้อ (พร้อม pagination และ search)
     async getOrderDetail(custCode, docNo, page = 1, pageSize = 20, search = '') {
         const params = {
+            view: 'mpr',
             cust_code: custCode,
             doc_no: docNo,
             page: page,

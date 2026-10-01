@@ -178,60 +178,27 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
     } finally { await mockPool.query("DELETE FROM ic_unit_use WHERE ic_code='P1' AND code='BOX'"); }
   });
 
-  it('blocks insufficient physical stock without closing 300, then allows retry and idempotent replay', async () => {
+  it('creates QT when physical stock is insufficient or unavailable; stock remains staff guidance only', async () => {
     await variants();
     await mockPool.query('TRUNCATE test_physical');
     const submitted = await send(payload('stock-gate', [item('P1', 10)]));
-    expect(submitted.status).toBe(200); // Customer requests remain allowed without stock.
     const doc = submitted.body.doc_no;
     await mockPool.query("INSERT INTO test_physical VALUES ('P1','W1','S1','EA',999),('P1-A','W1','S1','EA',5),('P1-B','W2','S2','EA',4)");
     const allocations = [
       { line_number: 1, item_code: 'P1-A', qty: 6, wh_code: 'W1', shelf_code: 'S1' },
       { line_number: 1, item_code: 'P1-B', qty: 4, wh_code: 'W2', shelf_code: 'S2' },
     ];
-    const rejected = await confirm(doc, allocations);
-    expect(rejected.status).toBe(422);
-    expect(rejected.body).toMatchObject({ success: false, code: 'INSUFFICIENT_STOCK', stock_issues: [{ item_code: 'P1-A', required_qty: 6, available_qty: 5 }] });
-    expect((await mockPool.query('SELECT * FROM ic_trans WHERE trans_flag=30')).rows).toHaveLength(0);
-    expect((await mockPool.query('SELECT * FROM marketplace_order_document')).rows).toHaveLength(0);
-    expect((await mockPool.query('SELECT status FROM marketplace_pending_order')).rows[0].status).toBe('pending');
-    expect((await mockPool.query('SELECT last_status FROM ic_trans WHERE trans_flag=300')).rows[0].last_status).toBe(0);
-    await mockPool.query("UPDATE test_physical SET balance_qty=6 WHERE ic_code='P1-A'");
     expect((await confirm(doc, allocations)).status).toBe(200);
-    await mockPool.query('TRUNCATE test_physical');
     const replay = await confirm(doc, allocations);
     expect(replay.status).toBe(200);
     expect(replay.body.duplicate).toBe(true);
-  });
-
-  it('checks total demand across a normal line, free goods and expanded set components', async () => {
-    const doc = (await send(payload('stock-set', [item('P1', 2), { ...item('SET1', 2), item_type: 3 }, { ...item('PROMO'), item_type: 4, sale_premium_code: 'PROMO' }]))).body.doc_no;
-    const detail = await request(app).get(`/pending-orders/${doc}`).set('Authorization', auth('EMP', 'employee'));
-    const allocations = detail.body.data.items.map(row => ({ line_number: row.line_number, wh_code: 'W2', shelf_code: 'S2' }));
-    await mockPool.query("UPDATE test_physical SET balance_qty=CASE WHEN ic_code='P1' THEN 4 WHEN ic_code='FREE1' THEN 0 ELSE balance_qty END WHERE ic_warehouse='W2'");
-    const result = await confirm(doc, allocations);
-    expect(result.status).toBe(422);
-    expect(result.body.stock_issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ item_code: 'P1', required_qty: 5, available_qty: 4 }),
-      expect.objectContaining({ item_code: 'FREE1', required_qty: 1, available_qty: 0 }),
-    ]));
-    await mockPool.query("UPDATE test_physical SET balance_qty=CASE WHEN ic_code='P1' THEN 5 WHEN ic_code='FREE1' THEN 1 WHEN ic_code='P2' THEN 4 ELSE balance_qty END WHERE ic_warehouse='W2'");
-    expect((await confirm(doc, allocations)).status).toBe(200);
-  });
-
-  it('fails closed when the stock function is unavailable and permits retry without losing the request', async () => {
-    const doc = (await send(payload('stock-failure'))).body.doc_no;
+    const noStockFunction = (await send(payload('stock-function-offline'))).body.doc_no;
     await mockPool.query('ALTER FUNCTION sml_ic_function_stock_balance_warehouse_location(date,text,text,text) RENAME TO test_stock_offline');
     try {
-      const result = await confirm(doc);
-      expect(result.status).toBe(503);
-      expect(result.body.code).toBe('STOCK_UNAVAILABLE');
-      expect((await mockPool.query('SELECT * FROM ic_trans WHERE trans_flag=30')).rows).toHaveLength(0);
-      expect((await mockPool.query('SELECT status FROM marketplace_pending_order')).rows[0].status).toBe('pending');
+      expect((await confirm(noStockFunction)).status).toBe(200);
     } finally {
       await mockPool.query('ALTER FUNCTION test_stock_offline(date,text,text,text) RENAME TO sml_ic_function_stock_balance_warehouse_location');
     }
-    expect((await confirm(doc)).status).toBe(200);
   });
 
   it('creates only 300, clears allocation, preserves amounts/shipment and deduplicates concurrent checkout', async () => {
