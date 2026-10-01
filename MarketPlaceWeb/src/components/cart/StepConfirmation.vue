@@ -1,6 +1,8 @@
 <!-- eslint-disable no-unused-vars -->
 <script setup>
 import CartService from '@/services/CartService';
+import DeliveryAddressForm from './DeliveryAddressForm.vue';
+import { useDeliveryAddress } from '@/composables/useDeliveryAddress';
 import { PRODUCT_IMAGE_PLACEHOLDER } from '@/utils/productPlaceholder';
 import CustomerService from '@/services/CustomerService';
 import DocHistoryService from '@/services/DocHistoryService';
@@ -63,7 +65,6 @@ const isCheckingOut = ref(false);
 const errorMessage = ref('');
 const checkoutErrorMeta = ref({});
 const allConfirmedItems = ref([]); // ( memory)
-const addressType = ref('current'); // 'current'  'custom'
 const isOrderProcessing = ref(false); // dialog loading
 const erpOption = ref({
     vat_type: 1,
@@ -403,16 +404,6 @@ const priceStatusMeta = computed(() => {
     };
 });
 
-const currentAddress = computed(() => {
-    return props.userData.address || '';
-});
-const currentTelephone = computed(() => {
-    return props.userData.telephone || '';
-});
-
-const customAddress = ref('');
-const customTelephone = ref('');
-
 // Advance payment data
 const advancePayments = ref([]);
 const isLoadingAdvancePayments = ref(false);
@@ -487,8 +478,8 @@ const checkoutFormIssue = computed(() =>
     })
 );
 const checkoutFormBlockMessage = computed(() => (checkoutFormIssue.value ? t(`reviewOrder.${checkoutFormIssue.value}`) : ''));
-const canSubmitOrder = computed(() => priceAndStockReady.value && !checkoutFormIssue.value);
-const checkoutBlockMessage = computed(() => priceBlockMessage.value || preorderBlockMessage.value || checkoutFormBlockMessage.value);
+const canSubmitOrder = computed(() => priceAndStockReady.value && !checkoutFormIssue.value && !(formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value));
+const checkoutBlockMessage = computed(() => priceBlockMessage.value || preorderBlockMessage.value || (formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value ? 'กำลังดึงข้อมูลที่อยู่ลูกค้า' : checkoutFormBlockMessage.value));
 
 // ข้อความ "กรุณาเลือกสาขา/วัน/เวลา/ผู้รับ/ทะเบียน" ต้องอยู่ติดกล่องที่ต้องแก้
 // ไม่ใช่ไปกองรวมล่างสุดของหน้า ซึ่งอยู่ไกลจากช่องที่ยังไม่ได้กรอก
@@ -502,14 +493,14 @@ const selectedCustomerDisplay = computed(() => {
 });
 const deliveryContactDisplay = computed(() => {
     if (formData.value.deliveryMethod === 'delivery') {
-        const tel = formData.value.deliveryTelephone || customTelephone.value || props.userData?.telephone || '';
+        const tel = formData.value.deliveryTelephone;
         return tel || '-';
     }
     return props.userData?.telephone || '-';
 });
 const deliveryAddressDisplay = computed(() => {
     if (formData.value.deliveryMethod !== 'delivery') return t('reviewOrder.pickupAtStore');
-    return formData.value.deliveryAddress || customAddress.value || currentAddress.value || '-';
+    return formData.value.deliveryAddress || '-';
 });
 const readinessChecks = computed(() => [
     {
@@ -555,13 +546,27 @@ const isSearchingCustomer = ref(false);
 const customerOptions = ref([]);
 const selectedCustomerCode = ref(localStorage.getItem('_userCode') || '');
 
+const shipping = useDeliveryAddress({
+    customerCode: () => props.userType === 'employee'
+        ? formData.value.customerCode || selectedCustomerCode.value
+        : props.userData.user_code || props.userData.code || selectedCustomerCode.value,
+    customer: () => props.userData,
+    draft: () => props.orderData,
+    loadCustomer: (code) => CustomerService.getCustomerDetail(code)
+});
+const { addressType, currentAddress, currentTelephone, customAddress, customTelephone,
+    loading: deliveryAddressLoading, loadError: deliveryAddressLoadError } = shipping;
+
+watch([shipping.deliveryAddress, shipping.deliveryTelephone], ([address, telephone]) => {
+    formData.value.deliveryAddress = address;
+    formData.value.deliveryTelephone = telephone;
+    formData.value.address = address;
+    formData.value.address_name = '';
+}, { immediate: true, flush: 'sync' });
+
 // Confirm order dialog
 const termsDialog = ref(false);
 const termsAccepted = ref(false);
-
-watch(addressType, () => {
-    handleAddressTypeChange();
-});
 
 // Update the watch for deliveryMethod to set send_type
 watch(
@@ -570,13 +575,6 @@ watch(
         formData.value.send_type = newValue === 'delivery' ? '1' : '0';
     }
 );
-
-watch([customAddress, customTelephone], () => {
-    if (addressType.value === 'custom') {
-        formData.value.deliveryAddress = customAddress.value;
-        formData.value.deliveryTelephone = customTelephone.value;
-    }
-});
 
 // Helper:  array  chunks
 function chunkArray(array, size) {
@@ -907,15 +905,6 @@ onMounted(async () => {
             ]);
         }
 
-        customAddress.value = props.userData.address || '';
-        customTelephone.value = props.userData.telephone || '';
-
-        // ที่อยู่จัดส่งต้องมาจากระบบเท่านั้น (รีวิว 260908 สไลด์ 7)
-        // 🚨 ห้ามสลับเป็น 'custom' เมื่อไม่มีที่อยู่อีกแล้ว — ตัวเลือกกรอกเองถูกตัดออก
-        //    ถ้าลูกค้าไม่มีที่อยู่ในระบบ ให้ติดขั้นตอนตรวจสอบแล้วไปติดต่อฝ่ายขายแทน
-        addressType.value = 'current';
-        handleAddressTypeChange();
-
         if (selectedEmployeeCode.value) {
             formData.value.employeeCode = selectedEmployeeCode.value;
         }
@@ -1020,20 +1009,6 @@ const onEmployeeSelect = (employee) => {
     }
 };
 
-function handleAddressTypeChange() {
-    if (addressType.value === 'current') {
-        formData.value.deliveryAddress = currentAddress.value;
-        formData.value.deliveryTelephone = currentTelephone.value;
-        formData.value.address = currentAddress.value;
-        formData.value.address_name = '';
-    } else {
-        formData.value.deliveryAddress = customAddress.value;
-        formData.value.deliveryTelephone = customTelephone.value;
-        formData.value.address = customAddress.value;
-        formData.value.address_name = '';
-    }
-}
-
 const loadInitialCustomers = async () => {
     try {
         isSearchingCustomer.value = true;
@@ -1114,16 +1089,13 @@ const onCustomerSelect = (customer) => {
         formData.value.customerCode = customer.code;
         localStorage.setItem('_userCode', customer.code);
         localStorage.setItem('_userData', JSON.stringify(customer));
-
-        formData.value.deliveryAddress = customer.address || '';
-        formData.value.deliveryTelephone = customer.telephone || '';
+        selectedCustomerCode.value = customer.code;
     } else {
         formData.value.customerCode = '';
         localStorage.removeItem('_userCode');
         localStorage.removeItem('_userData');
 
-        formData.value.deliveryAddress = '';
-        formData.value.deliveryTelephone = '';
+        selectedCustomerCode.value = '';
     }
 };
 
@@ -1257,14 +1229,8 @@ async function proceedCheckout() {
             // -
             formData.value.telephone = formData.value.deliveryTelephone;
 
-            // address  address_name
-            if (addressType.value === 'current') {
-                formData.value.address = currentAddress.value;
-                formData.value.address_name = '';
-            } else {
-                formData.value.address = customAddress.value;
-                formData.value.address_name = '';
-            }
+            formData.value.address = formData.value.deliveryAddress;
+            formData.value.address_name = '';
         }
 
         // dd/mm/yyyy สำหรับข้อความที่คนอ่าน
@@ -2026,17 +1992,11 @@ function isExpanded(itemCode) {
                                 </div>
                             </div>
                         </div>
-                        <!-- ที่อยู่จัดส่ง — แก้ไขไม่ได้แล้ว (รีวิว 260908 สไลด์ 7)
-                             ลูกค้าระบุว่าต้องใช้ที่อยู่ตามระบบเท่านั้น จะเปลี่ยนต้องติดต่อฝ่ายขาย
-                             จึงตัดตัวเลือก "ระบุที่อยู่ใหม่" ออกทั้งหมด -->
-                        <div v-if="formData.deliveryMethod === 'delivery'" class="mb-4">
-                            <label class="block font-medium mb-2">{{ t('reviewOrder.deliveryAddress') }}</label>
-                            <div class="confirmation-subcard p-4 rounded-lg">
-                                <div class="whitespace-pre-line">{{ currentAddress || t('reviewOrder.notSpecified') }}</div>
-                                <div class="text-gray-600 dark:text-gray-400 mt-1">{{ t('reviewOrder.phoneLabel') }} {{ currentTelephone || t('reviewOrder.notSpecified') }}</div>
-                            </div>
-                            <Message severity="info" :closable="false" class="mt-2">{{ t('reviewOrder.addressReadonlyNotice') }}</Message>
-                        </div>
+                        <DeliveryAddressForm v-if="formData.deliveryMethod === 'delivery'"
+                            :address-type="addressType" :current-address="currentAddress" :current-telephone="currentTelephone"
+                            :custom-address="customAddress" :custom-telephone="customTelephone"
+                            :loading="deliveryAddressLoading" :load-error="deliveryAddressLoadError" :issue="checkoutFormIssue"
+                            @select-type="shipping.selectType" @set-address="shipping.setAddress" @set-telephone="shipping.setTelephone" @retry="shipping.refresh" />
 
                         <!-- ข้อมูลเครดิต -->
                         <div class="mb-4" v-if="isLoadingCreditData || creditData.credit_day">
@@ -2228,15 +2188,11 @@ function isExpanded(itemCode) {
                     </Select>
                     <small class="text-color-secondary">{{ t('reviewOrder.searchHint') }}</small> -->
 
-                        <!-- ที่อยู่จัดส่ง — แก้ไขไม่ได้ ต้องใช้ที่อยู่ตามระบบเท่านั้น (รีวิว 260908 สไลด์ 7) -->
-                        <div v-if="formData.deliveryMethod === 'delivery'" class="mb-4">
-                            <label class="block font-medium mb-2">{{ t('reviewOrder.deliveryAddress') }}</label>
-                            <div class="confirmation-subcard p-4 rounded-lg">
-                                <div class="whitespace-pre-line">{{ formData.deliveryAddress || t('reviewOrder.notSpecified') }}</div>
-                                <div class="text-gray-600 dark:text-gray-400 mt-1">{{ t('reviewOrder.phoneLabel') }} {{ formData.deliveryTelephone || t('reviewOrder.notSpecified') }}</div>
-                            </div>
-                            <Message severity="info" :closable="false" class="mt-2">{{ t('reviewOrder.addressReadonlyNotice') }}</Message>
-                        </div>
+                        <DeliveryAddressForm v-if="formData.deliveryMethod === 'delivery'"
+                            :address-type="addressType" :current-address="currentAddress" :current-telephone="currentTelephone"
+                            :custom-address="customAddress" :custom-telephone="customTelephone"
+                            :loading="deliveryAddressLoading" :load-error="deliveryAddressLoadError" :issue="checkoutFormIssue"
+                            @select-type="shipping.selectType" @set-address="shipping.setAddress" @set-telephone="shipping.setTelephone" @retry="shipping.refresh" />
 
                         <!-- ข้อมูลเครดิต (employee) -->
                         <div class="mb-4" v-if="isLoadingCreditData || creditData.credit_day">
