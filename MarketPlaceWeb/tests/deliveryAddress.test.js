@@ -20,7 +20,6 @@ describe('checkout delivery address', () => {
         expect(s.loading.value).toBe(true);
         await flush();
         expect(load).toHaveBeenCalledWith('B00063');
-        expect(s.addressType.value).toBe('current');
         expect(s.deliveryAddress.value).toBe(fresh.address);
         expect(s.customTelephone.value).toBe(fresh.telephone);
         expect(s.loading.value).toBe(false);
@@ -33,16 +32,12 @@ describe('checkout delivery address', () => {
     it('preserves a custom draft supplied by the checkout', async () => {
         const { state: s } = setup({ draft: { deliveryAddress: 'สาขาใหม่', deliveryTelephone: '0899999999' } });
         await flush();
-        expect(s.addressType.value).toBe('custom');
         expect(s.deliveryAddress.value).toBe('สาขาใหม่');
     });
-    it('keeps custom edits when switching back and forth without mutating master', async () => {
+    it('keeps direct checkout edits without mutating the customer master profile', async () => {
         const { state: s } = setup(); await flush();
         s.setAddress('  บ้านใหม่  '); s.setTelephone(' 0899999999 ');
         expect(s.deliveryAddress.value).toBe('บ้านใหม่');
-        s.selectType('current');
-        expect(s.deliveryAddress.value).toBe(fresh.address);
-        s.selectType('custom');
         expect(s.deliveryTelephone.value).toBe('0899999999');
         expect(s.currentAddress.value).toBe(fresh.address);
     });
@@ -57,7 +52,6 @@ describe('checkout delivery address', () => {
     it('selects editable fields when either master field is missing', async () => {
         const { state: s } = setup({ load: async () => ({ ...fresh, telephone: '' }) });
         await flush();
-        expect(s.addressType.value).toBe('custom');
         expect(s.customAddress.value).toBe(fresh.address);
         expect(getCheckoutFormIssue({ deliveryMethod: 'delivery', deliveryAddress: s.deliveryAddress.value, deliveryTelephone: s.deliveryTelephone.value })).toBe('requireDeliveryPhone');
     });

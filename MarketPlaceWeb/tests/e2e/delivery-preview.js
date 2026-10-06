@@ -54,7 +54,7 @@ const app = createApp({ render: () => h('main', { style: 'max-width:1100px;margi
         userData: { user_code: 'B00063', name: 'ร้านตัวอย่าง สมัยการค้า' },
         orderData: { deliveryMethod: 'pickup', customerCode: 'B00063' }, totals: { total: 195 },
         onProcessCheckout: (payload, callback) => {
-            submitted.value = JSON.stringify({ send_type: payload.send_type, address: payload.address, telephone: payload.telephone }, null, 2);
+            submitted.value = JSON.stringify({ send_type: payload.send_type, send_date: payload.send_date, send_day: payload.send_day, address: payload.address, telephone: payload.telephone }, null, 2);
             callback({ success: false, message: 'บันทึกเฉพาะตัวอย่าง ไม่ส่ง ERP' });
         }
     })

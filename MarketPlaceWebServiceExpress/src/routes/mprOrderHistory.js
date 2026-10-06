@@ -65,6 +65,7 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
     return { ...mapOrderRow(group), payment_documents: [...invoices.values()] };
   });
   const requestSelect = `SELECT p.*, t.doc_date::text AS doc_date, t.doc_time, t.send_type,
+    t.send_date::text AS send_date, COALESCE(t.send_day,0) AS send_day,
     t.total_amount,t.total_before_vat,t.total_except_vat,t.total_after_vat,t.total_vat_value,t.total_discount,t.remark,
     c.name_1 AS cust_name, s.transport_name AS address,s.transport_address AS address_name,s.transport_telephone AS telephone
     FROM marketplace_pending_order p JOIN ic_trans t ON t.doc_no=p.doc_no AND t.trans_flag=300

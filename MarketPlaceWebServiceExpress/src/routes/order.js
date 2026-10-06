@@ -1357,7 +1357,7 @@ FROM (
     ic_qt.doc_no, ic_qt.doc_date::text AS doc_date, ic_qt.doc_time, ic_qt.cust_code,
     ic_qt.send_type, ic_qt.sale_code AS emp_code,
     -- วันส่งที่ลูกค้าเห็น: เอาจากเอกสารล่าสุดในสายงานเสมอ (INV > SO > QT)
-    -- ตอนสั่งซื้อลูกค้าไม่ได้เลือกวันแล้ว เซลส์เป็นคนระบุตอน process SO
+    -- MPR/QT เก็บวันที่ที่ลูกค้าเลือก และ SO/INV ที่ใหม่กว่าจะเป็นวันที่ยืนยันจริง
     COALESCE(ic_inv.send_date, ic_so.send_date, ic_qt.send_date)::text AS send_date,
     -- แยกไว้ให้ฝั่งหน้าเว็บรู้ว่าวันนี้มาจากเอกสารจริงหรือยังเป็นค่าที่ลูกค้ากรอกไว้
     CASE WHEN COALESCE(ic_inv.send_date, ic_so.send_date) IS NOT NULL THEN 1 ELSE 0 END AS send_date_confirmed,

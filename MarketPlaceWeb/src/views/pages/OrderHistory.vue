@@ -1748,8 +1748,9 @@ onMounted(fetchOrderHistory);
                                 <div>{{ t('historyPages.common.orderDate') }} {{ formatDate(selectedOrder.doc_date, selectedOrder.doc_time) }}</div>
 
                                 <div v-if="String(selectedOrder.send_type) === '1'" class="mt-1">
-                                    <template v-if="selectedOrder.send_date && Number(selectedOrder.send_date_confirmed) === 1">
+                                    <template v-if="selectedOrder.send_date">
                                         {{ t('historyPages.common.deliveryDate') }} {{ formatDate(selectedOrder.send_date) }}
+                                        <span v-if="selectedOrder.send_day" class="text-xs ml-2">{{ t('historyPages.common.deliveryDays', { days: selectedOrder.send_day }) }}</span>
                                     </template>
                                     <template v-else>{{ t('reviewOrder.deliveryByNormalRound') }}</template>
                                 </div>

@@ -24,7 +24,8 @@ function projectHeader(pending, header, operational = {}) {
     cust_name: header.cust_name || '', address: header.address || '',
     address_name: header.address_name || '', telephone: header.telephone || '',
     ship_address: header.address || '', contact_telephone: header.telephone || '',
-    send_type: header.send_type, remark_qt: header.remark || '', status,
+    send_type: header.send_type, send_date: header.send_date || '', send_day: number(header.send_day),
+    remark_qt: header.remark || '', status,
     can_cancel: pending.status === 'pending' || (pending.status === 'confirmed' && status === 'pending'
       && operational.sub_docs?.length > 0 && operational.sub_docs.every(row => row.status === 'pending')),
   };

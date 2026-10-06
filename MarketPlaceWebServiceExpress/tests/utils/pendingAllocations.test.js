@@ -6,6 +6,10 @@ describe('allocation validation and money', () => {
     expect(normalizeAllocations([root], [{ line_number: 1, wh_code: 'W', shelf_code: 'S', price: 0 }]).get(1)[0]).toMatchObject({ item_code: 'WEB', qty: 10 });
     expect(normalizeAllocations([root], [part(6), part(4, 'B')]).get(1)).toHaveLength(2);
   });
+  it('accepts a Thai shelf code selected from the ERP master', () => {
+    const normalized = normalizeAllocations([root], [{ line_number: 1, wh_code: 'W', shelf_code: 'หน้าร้าน' }]);
+    expect(normalized.get(1)[0]).toMatchObject({ item_code: 'WEB', qty: 10, wh_code: 'W', shelf_code: 'หน้าร้าน' });
+  });
   it.each([[], [part(9)], [part(11)], [part(-1), part(11, 'B')], [part(6), part(4)], [{ ...part(10), line_number: 99 }], [{ ...part(10), item_code: "A'" }], [{ ...part(10), qty: undefined }]].map(allocations => [allocations]))('rejects invalid allocation %j', allocations => {
     expect(() => normalizeAllocations([root], allocations)).toThrow();
   });

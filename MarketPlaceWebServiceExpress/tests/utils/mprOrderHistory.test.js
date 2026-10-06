@@ -67,14 +67,15 @@ test.each([['pending', 'awaiting_confirmation'], ['cancelled', 'cancelled'], ['r
   expect(result.reason).toBe('reason');
   expect(result.can_cancel).toBe(status === 'pending');
 });
-test('confirmed follows mixed ERP state, preserves invoice identity and request money/date', () => {
+test('confirmed follows mixed ERP state, preserves invoice identity and requested delivery date', () => {
   const [operational] = aggregateOrderRowsByMainDoc([
     { main_doc_no: 'MPR1', doc_no: 'QT1', status: 'packing', total_amount: 60 },
     { main_doc_no: 'MPR1', doc_no: 'QT2', status: 'payment', total_amount: 70, invoiced_amount: 65, balance: 65, inv_doc_no: 'INV2', delivery_image_doc_no: 'INV2', delivery_image_count: 1 },
   ]);
-  const result = projectHeader(pending, { doc_date: '2026-09-01', total_amount: 130 }, operational);
+  const result = projectHeader(pending, { doc_date: '2026-09-01', send_date: '2026-09-03', send_day: 2, total_amount: 130 }, operational);
   expect(result).toMatchObject({ doc_no: 'MPR1', qt_main_doc_no: 'QT', status: 'packing', mixed_progress: true,
-    inv_doc_no: 'INV2', delivery_image_doc_no: 'INV2', invoiced_amount: 65, balance: 65, total_amount: 130, doc_date: '2026-09-01', can_cancel: false });
+    inv_doc_no: 'INV2', delivery_image_doc_no: 'INV2', invoiced_amount: 65, balance: 65, total_amount: 130,
+    doc_date: '2026-09-01', send_date: '2026-09-03', send_day: 2, can_cancel: false });
 });
 test('missing operational documents cannot be cancelled as QT', () => {
   expect(projectHeader(pending, {}).can_cancel).toBe(false);

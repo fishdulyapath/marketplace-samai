@@ -554,7 +554,7 @@ const shipping = useDeliveryAddress({
     draft: () => props.orderData,
     loadCustomer: (code) => CustomerService.getCustomerDetail(code)
 });
-const { addressType, currentAddress, currentTelephone, customAddress, customTelephone,
+const { customAddress, customTelephone,
     loading: deliveryAddressLoading, loadError: deliveryAddressLoadError } = shipping;
 
 watch([shipping.deliveryAddress, shipping.deliveryTelephone], ([address, telephone]) => {
@@ -1978,25 +1978,11 @@ function isExpanded(itemCode) {
                             <Message v-if="pickupBlockMessage" severity="warn" :closable="false" class="mt-2">{{ pickupBlockMessage }}</Message>
                         </div>
 
-                        <!-- ข้อมูลการจัดส่ง — ลูกค้าไม่เลือกวันเองแล้ว (รีวิว 260908 สไลด์ 7)
-                             เซลส์จะระบุวันส่งจริงตอน process SO แล้วค่อยขึ้นในหน้าติดตามสถานะ -->
-                        <div v-if="formData.deliveryMethod === 'delivery'" class="mb-4">
-                            <label class="block font-medium mb-2">{{ t('reviewOrder.deliveryInfo') }}</label>
-                            <div class="confirmation-subcard p-4 rounded-lg">
-                                <div class="flex items-start gap-2">
-                                    <i class="pi pi-truck mt-1 text-primary-500"></i>
-                                    <div>
-                                        <div class="font-medium">{{ t('reviewOrder.deliveryByNormalRound') }}</div>
-                                        <small class="text-color-secondary">{{ t('reviewOrder.deliveryDateAfterProcess') }}</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
                         <DeliveryAddressForm v-if="formData.deliveryMethod === 'delivery'"
-                            :address-type="addressType" :current-address="currentAddress" :current-telephone="currentTelephone"
                             :custom-address="customAddress" :custom-telephone="customTelephone"
+                            :send-date="sendDate" :send-days="sendDay" :min-date="tomorrow" date-input-id="send-date-customer"
                             :loading="deliveryAddressLoading" :load-error="deliveryAddressLoadError" :issue="checkoutFormIssue"
-                            @select-type="shipping.selectType" @set-address="shipping.setAddress" @set-telephone="shipping.setTelephone" @retry="shipping.refresh" />
+                            @update:send-date="sendDate = $event" @set-address="shipping.setAddress" @set-telephone="shipping.setTelephone" @retry="shipping.refresh" />
 
                         <!-- ข้อมูลเครดิต -->
                         <div class="mb-4" v-if="isLoadingCreditData || creditData.credit_day">
@@ -2142,20 +2128,6 @@ function isExpanded(itemCode) {
                             <Message v-if="pickupBlockMessage" severity="warn" :closable="false" class="mt-2">{{ pickupBlockMessage }}</Message>
                         </div>
 
-                        <!-- ข้อมูลการจัดส่ง — เซลส์ระบุวันส่งจริงตอน process SO (รีวิว 260908 สไลด์ 7) -->
-                        <div v-if="formData.deliveryMethod === 'delivery'" class="mb-4">
-                            <label class="block font-medium mb-2">{{ t('reviewOrder.deliveryInfo') }}</label>
-                            <div class="confirmation-subcard p-4 rounded-lg">
-                                <div class="flex items-start gap-2">
-                                    <i class="pi pi-truck mt-1 text-primary-500"></i>
-                                    <div>
-                                        <div class="font-medium">{{ t('reviewOrder.deliveryByNormalRound') }}</div>
-                                        <small class="text-color-secondary">{{ t('reviewOrder.deliveryDateAfterProcess') }}</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
                         <!-- <Select
                         v-model="selectedCustomer"
                         :options="customerOptions"
@@ -2189,10 +2161,10 @@ function isExpanded(itemCode) {
                     <small class="text-color-secondary">{{ t('reviewOrder.searchHint') }}</small> -->
 
                         <DeliveryAddressForm v-if="formData.deliveryMethod === 'delivery'"
-                            :address-type="addressType" :current-address="currentAddress" :current-telephone="currentTelephone"
                             :custom-address="customAddress" :custom-telephone="customTelephone"
+                            :send-date="sendDate" :send-days="sendDay" :min-date="tomorrow" date-input-id="send-date-employee"
                             :loading="deliveryAddressLoading" :load-error="deliveryAddressLoadError" :issue="checkoutFormIssue"
-                            @select-type="shipping.selectType" @set-address="shipping.setAddress" @set-telephone="shipping.setTelephone" @retry="shipping.refresh" />
+                            @update:send-date="sendDate = $event" @set-address="shipping.setAddress" @set-telephone="shipping.setTelephone" @retry="shipping.refresh" />
 
                         <!-- ข้อมูลเครดิต (employee) -->
                         <div class="mb-4" v-if="isLoadingCreditData || creditData.credit_day">
@@ -2273,7 +2245,7 @@ function isExpanded(itemCode) {
                         </div>
                         <div>
                             <span>{{ t('reviewOrder.deliveryDateSummary') }}</span>
-                            <strong v-if="formData.deliveryMethod === 'delivery'">{{ t('reviewOrder.deliveryByNormalRound') }}</strong>
+                            <strong v-if="formData.deliveryMethod === 'delivery'">{{ formatDisplayDate(sendDate) }}</strong>
                             <strong v-else-if="pickupDate">{{ formatDisplayDate(pickupDate) }} {{ pickupTimeSlot }}</strong>
                             <strong v-else>-</strong>
                         </div>

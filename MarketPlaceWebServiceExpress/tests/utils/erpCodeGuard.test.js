@@ -22,12 +22,10 @@ describe('isSafeErpCode — ปิดช่องที่ $1 กันไม่
     expect(isSafeErpCode('มก-001')).toBe(true);
   });
 
-  // บันทึกข้อจำกัดที่วัดกับฐานจริงแล้ว ไม่ใช่การเดา
-  // \p{L} ไม่ครอบสระ/วรรณยุกต์ไทย (combining mark หมวด Mn) ขณะที่ [[:alnum:]] ฝั่ง SQL รับบางตัว
-  // ทิศทางนี้ปลอดภัยเพราะ JS เข้มกว่า และในฐานไม่มีรหัสที่ตกสักตัว
-  it('รหัสไทยที่มีสระ/วรรณยุกต์ยังไม่รองรับ — ถ้าจะรองรับต้องแก้พร้อมกันทั้งสองฝั่ง', () => {
-    expect(isSafeErpCode('ลัง24')).toBe(false);
-    expect(isSafeErpCode('น้ำ')).toBe(false);
+  it('รหัสไทยที่มีสระ/วรรณยุกต์ผ่าน เพื่อรองรับรหัสที่เก็บจาก master ERP', () => {
+    expect(isSafeErpCode('ลัง24')).toBe(true);
+    expect(isSafeErpCode('น้ำ')).toBe(true);
+    expect(isSafeErpCode('หน้าร้าน')).toBe(true);
   });
 
   it('เพย์โหลดที่ยิงทะลุได้จริงต้องถูกปฏิเสธ', () => {
@@ -68,6 +66,11 @@ describe('checkErpCode', () => {
   it('คืนข้อความไทยที่มีชื่อฟิลด์ ให้ผู้เรียกส่งกลับเป็น 400 ได้เลย', () => {
     expect(checkErpCode(REAL_PAYLOAD, 'item_code')).toBe('item_code มีอักขระที่ไม่อนุญาต');
     expect(checkErpCode('A'.repeat(60), 'wh_code')).toBe('wh_code ยาวเกินกำหนด');
+    expect(checkErpCode("หน้าร้าน'", 'shelf_code')).toBe('shelf_code มีอักขระที่ไม่อนุญาต');
+  });
+
+  it('รองรับรหัสที่เก็บภาษาไทยจาก master', () => {
+    expect(checkErpCode('หน้าร้าน', 'shelf_code')).toBeNull();
   });
 
   it('รหัสที่มีเว้นวรรคหัวท้ายยังผ่าน เพราะช่องว่างอยู่ใน allowlist', () => {
