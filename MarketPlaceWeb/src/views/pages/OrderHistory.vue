@@ -1650,6 +1650,9 @@ onMounted(fetchOrderHistory);
                             </span>
                             <span class="soh-card__total-label">{{ t('historyPages.common.orderTotal') }}</span>
                             <span class="soh-card__total-amount">฿{{ formatCurrency(order.total_amount) }}</span>
+                            <span v-if="order.document_total_amount !== null && Number(order.request_total_amount) !== Number(order.total_amount)" class="soh-card__net">
+                                ยอดคำขอเดิม ฿{{ formatCurrency(order.request_total_amount) }}
+                            </span>
                             <!-- คำสั่งซื้อที่ถูกแตกเป็นหลายเอกสาร ถ้า ERP ยกเลิกบางใบ
                                  ยอดข้างบนจะสูงกว่ายอดที่ต้องจ่ายจริง ต้องบอกให้ลูกค้าเห็น -->
                             <span v-if="Number(order.cancelled_amount) > 0 && order.status !== 'cancel'" class="soh-card__net">
@@ -1723,6 +1726,7 @@ onMounted(fetchOrderHistory);
                         <div class="detail-hero__right">
                             <div class="detail-hero__caption">{{ t('historyPages.common.docTotal') }}</div>
                             <div class="detail-hero__amount">฿{{ formatCurrency(selectedOrder.total_amount) }}</div>
+                            <div v-if="selectedOrder.document_total_amount !== null && Number(selectedOrder.request_total_amount) !== Number(selectedOrder.total_amount)" class="text-sm text-gray-500">ยอดคำขอเดิม ฿{{ formatCurrency(selectedOrder.request_total_amount) }}</div>
                             <Tag :value="String(selectedOrder.send_type) === '1' ? t('historyPages.common.shipping') : t('historyPages.common.pickup')" :severity="String(selectedOrder.send_type) === '1' ? 'info' : 'success'" class="mt-1" />
                         </div>
                     </div>

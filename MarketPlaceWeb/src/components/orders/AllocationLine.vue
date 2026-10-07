@@ -22,19 +22,20 @@ const stockError = ref('');
 let alive = true;
 let version = 0;
 const isSet = computed(() => Number(props.source.item_type) === 3);
+const isFixed = computed(() => isSet.value || Number(props.source.is_permium) === 1);
 const rows = computed(() => props.source.allocations);
 const qty = (value) => (value == null ? 'ไม่ทราบยอด' : Number(value).toLocaleString('th-TH', { maximumFractionDigits: 8 }));
 const optionFor = (row) => options.value.find((option) => option.item_code === row.item_code);
 const total = computed(() => rows.value.reduce((sum, row) => sum + Number(row.qty || 0), 0));
 const remaining = computed(() => remainingQty(props.source, rows.value));
 const candidates = computed(() => options.value.filter((option) => `${option.item_code} ${option.item_name}`.toLowerCase().includes(pickerSearch.value.trim().toLowerCase())));
-const health = computed(() => ({ short: !isSet.value && rows.value.some((row) => stockAt(row) != null && Number(stockAt(row)) < Number(row.qty)), unknown: !isSet.value && rows.value.some((row) => stockAt(row) == null) }));
+const health = computed(() => ({ short: !isFixed.value && rows.value.some((row) => stockAt(row) != null && Number(stockAt(row)) < Number(row.qty)), unknown: !isFixed.value && rows.value.some((row) => stockAt(row) == null) }));
 watch(health, (value) => emit('health', value), { immediate: true });
 const validation = computed(() => {
     if (loading.value) return 'กำลังตรวจสอบสินค้า…';
     const issue = allocationError(props.source, rows.value);
     if (issue) return issue;
-    if (!isSet.value && rows.value.some((row) => !optionFor(row)?.selectable)) return 'กรุณาเลือกสินค้าที่หน่วยและภาษีตรงกับคำขอ';
+    if (!isFixed.value && rows.value.some((row) => !optionFor(row)?.selectable)) return 'กรุณาเลือกสินค้าจริงที่พร้อมใช้งาน';
     if (rows.value.some((row) => !props.warehouses?.some((wh) => wh.code === row.wh_code) || !shelves.value[row.wh_code]?.some((shelf) => shelf.code === row.shelf_code))) return 'กรุณาเลือกคลังและที่เก็บจาก master ให้ครบ';
     return '';
 });
@@ -110,7 +111,7 @@ async function chooseLocation(row, location) {
     if (alive && row.wh_code === location.wh_code && shelves.value[location.wh_code]?.some((shelf) => shelf.code === location.shelf_code)) row.shelf_code = location.shelf_code;
 }
 async function loadOptions() {
-    if (isSet.value) return;
+    if (isFixed.value) return;
     const request = ++version;
     loading.value = true;
     error.value = '';
@@ -122,7 +123,7 @@ async function loadOptions() {
         options.value = data.options.map((row) => ({
             ...row,
             disabled: !row.selectable,
-            label: `${row.item_code} — ${row.item_name}${row.is_original ? ' (รหัสเดิม)' : ''} · ${qty(row.balance_qty)} ${row.unit_code}${row.disabled_reason ? ` · ${row.disabled_reason}` : ''}`
+            label: `${row.item_code} — ${row.item_name}${row.is_original ? ' (รหัสเดิม)' : ''} · ${Number(row.tax_type) === 1 ? 'ยกเว้น VAT' : 'คิด VAT'} · ${row.price_available ? '฿' + Number(row.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : 'ไม่พบราคา'} · ${qty(row.balance_qty)} ${row.unit_code}${row.disabled_reason ? ` · ${row.disabled_reason}` : ''}`
         }));
     } catch (err) {
         if (alive && request === version) {
@@ -177,7 +178,7 @@ onBeforeUnmount(() => {
             <span :class="health.short ? 'validation' : 'complete'">✓ จัดสรรครบ{{ health.short ? ' · สต๊อกไม่พอ' : health.unknown ? ' · ไม่ทราบสต๊อก' : '' }}</span>
         </div>
         <div v-show="!collapsed || validation">
-            <p v-if="isSet" class="set-note">ชุดและส่วนประกอบใช้คลัง / ที่เก็บเดียวกัน ไม่เปลี่ยนรหัสหรือแบ่งจำนวน</p>
+            <p v-if="isFixed" class="set-note">{{ isSet ? 'ชุดและส่วนประกอบใช้คลัง / ที่เก็บเดียวกัน ไม่เปลี่ยนรหัสหรือแบ่งจำนวน' : 'ของแถมคงสินค้าและราคา 0 ตามคำขอ เปลี่ยนได้เฉพาะคลัง / ที่เก็บ' }}</p>
             <details v-if="source.sub_item?.length" class="set-note">
                 <summary>ส่วนประกอบ {{ source.sub_item.length }} รายการ</summary>
                 <p v-for="sub in source.sub_item" :key="sub.line_number">{{ sub.item_code }} · {{ sub.item_name }} × {{ sub.qty }} {{ sub.unit_code }}</p>
@@ -190,7 +191,7 @@ onBeforeUnmount(() => {
                         <div class="product-field">
                             <span>→ สินค้าจริง {{ index + 1 }}</span
                             ><Select
-                                v-if="!isSet"
+                                v-if="!isFixed"
                                 v-model="row.item_code"
                                 :options="options"
                                 optionLabel="label"
@@ -205,11 +206,11 @@ onBeforeUnmount(() => {
                                 ></Select
                             ><strong v-else>{{ row.item_code }}</strong
                             ><small>{{ optionFor(row)?.item_name || source.item_name }}</small
-                            ><Button v-if="!isSet" label="เลือกสินค้า + ตำแหน่ง" icon="pi pi-map-marker" outlined size="small" :disabled="disabled || loading" @click="openPicker(index)" />
+                            ><Button v-if="!isFixed" label="เลือกสินค้า + ตำแหน่ง" icon="pi pi-map-marker" outlined size="small" :disabled="disabled || loading" @click="openPicker(index)" />
                         </div>
                         <label
-                            ><span>จำนวน ({{ source.unit_code }})</span><InputNumber v-model="row.qty" :min="0" :max="Number(source.qty)" :maxFractionDigits="8" :aria-label="`จำนวนจัดสรร ${index + 1}`" :disabled="disabled || isSet" /><Button
-                                v-if="!isSet && rows.length > 1 && remainingQty(source, rows, index) > 0 && remaining !== 0"
+                            ><span>จำนวน ({{ source.unit_code }})</span><InputNumber v-model="row.qty" :min="0" :max="Number(source.qty)" :maxFractionDigits="8" :aria-label="`จำนวนจัดสรร ${index + 1}`" :disabled="disabled || isFixed" /><Button
+                                v-if="!isFixed && rows.length > 1 && remainingQty(source, rows, index) > 0 && remaining !== 0"
                                 label="เติมส่วนที่เหลือ"
                                 text
                                 size="small"
@@ -232,7 +233,7 @@ onBeforeUnmount(() => {
                                 :aria-label="`ที่เก็บจัดสรร ${index + 1}`"
                                 :disabled="disabled || !row.wh_code"
                         /></label>
-                        <Button icon="pi pi-trash" text severity="secondary" :aria-label="`ลบรายการ ${index + 1}`" :disabled="disabled || rows.length === 1 || isSet" @click="rows.splice(index, 1)" />
+                        <Button icon="pi pi-trash" text severity="secondary" :aria-label="`ลบรายการ ${index + 1}`" :disabled="disabled || rows.length === 1 || isFixed" @click="rows.splice(index, 1)" />
                     </div>
                     <Button
                         v-if="row.wh_code && !shelves[row.wh_code]"
@@ -247,7 +248,7 @@ onBeforeUnmount(() => {
                     <p v-if="row.wh_code && row.shelf_code" class="location-caption">
                         {{ row.wh_code }} · {{ warehouses?.find((wh) => wh.code === row.wh_code)?.name_1 }} / {{ row.shelf_code }} · {{ shelves[row.wh_code]?.find((shelf) => shelf.code === row.shelf_code)?.name_1 }}
                     </p>
-                    <div v-if="!isSet" class="stock-strip">
+                    <div v-if="!isFixed" class="stock-strip">
                         <span class="stock-badge" :class="stockAt(row) == null ? 'unknown' : Number(stockAt(row)) < Number(row.qty) ? 'short' : 'enough'">{{
                             stockAt(row) == null
                                 ? 'ยังไม่ทราบยอด · ยังยืนยันได้ แต่ควรตรวจสอบก่อน'
@@ -268,8 +269,8 @@ onBeforeUnmount(() => {
             </fieldset>
             <footer class="line-footer">
                 <div>
-                    <Button v-if="!isSet" label="เพิ่มรายการจัดสรร" icon="pi pi-plus" text size="small" :disabled="disabled" @click="addRow" /><Button
-                        v-if="!isSet"
+                    <Button v-if="!isFixed" label="เพิ่มรายการจัดสรร" icon="pi pi-plus" text size="small" :disabled="disabled" @click="addRow" /><Button
+                        v-if="!isFixed"
                         icon="pi pi-refresh"
                         text
                         size="small"
@@ -307,7 +308,12 @@ onBeforeUnmount(() => {
                     ><span>คงเหลือจริง {{ qty(option.balance_qty) }} {{ option.unit_code }}</span>
                 </header>
                 <p>{{ option.item_name }}</p>
-                <p v-if="!option.selectable" class="validation">{{ option.disabled_reason || 'หน่วยหรือภาษีไม่ตรงกับต้นทาง' }}</p>
+                <p v-if="!option.selectable" class="validation">{{ option.disabled_reason || 'เลือกสินค้านี้ไม่ได้' }}</p>
+                <p class="picker-pricing">
+                    ภาษี: {{ Number(option.tax_type) === 1 ? 'ยกเว้น VAT' : 'คิด VAT' }} · ราคา:
+                    {{ option.price_available ? `฿${Number(option.price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}` : 'ไม่พบราคา' }}
+                    <span v-if="option.default_discount"> · ลด {{ option.default_discount }}</span>
+                </p>
                 <button
                     v-for="location in option.locations"
                     :key="`${location.wh_code}/${location.shelf_code}`"
@@ -321,7 +327,7 @@ onBeforeUnmount(() => {
                 </button>
                 <Button label="เลือกสินค้าอย่างเดียว" text size="small" :disabled="picking || !option.selectable" @click="selectCandidate(option)" />
             </article>
-            <template #footer><small>เลือกเพื่อจัดสรรได้ · ก่อนสร้าง QT ต้องตรวจสต๊อกล่าสุดว่าพอ</small><Button label="กลับ" outlined :disabled="picking" @click="pickerIndex = null" /></template>
+            <template #footer><small>สต๊อกแสดงเพื่อช่วยตัดสินใจ · ระบบจะคำนวณราคา ภาษี และยอด QT ล่าสุดก่อนยืนยัน</small><Button label="กลับ" outlined :disabled="picking" @click="pickerIndex = null" /></template>
         </Dialog>
     </article>
 </template>
@@ -376,6 +382,10 @@ onBeforeUnmount(() => {
 }
 .picker-product p {
     margin: 0.5rem 0;
+}
+.picker-pricing {
+    color: #466051;
+    font-size: 0.84rem;
 }
 .picker-location {
     width: 100%;

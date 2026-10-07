@@ -29,10 +29,14 @@ function projectHeader(pending, header, operational = {}) {
     can_cancel: pending.status === 'pending' || (pending.status === 'confirmed' && status === 'pending'
       && operational.sub_docs?.length > 0 && operational.sub_docs.every(row => row.status === 'pending')),
   };
-  // The immutable request is not the collectible invoice: keep both totals.
+  // MPR is immutable audit. Once confirmed, the QT total is the collectible/display total.
+  const hasQtTotal = pending.status === 'confirmed' && qtNumbers(pending).length > 0 && Number.isFinite(Number(operational.total_amount));
   for (const key of ['total_amount', 'total_before_vat', 'total_except_vat', 'total_after_vat', 'total_vat_value', 'total_discount']) {
-    result[key] = number(header[key]);
+    result[`request_${key}`] = number(header[key]);
+    result[key] = hasQtTotal && key in operational ? number(operational[key]) : number(header[key]);
   }
+  result.qt_total_amount = hasQtTotal ? number(operational.total_amount) : null;
+  result.document_total_amount = result.qt_total_amount;
   return result;
 }
 

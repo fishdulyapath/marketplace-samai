@@ -15,6 +15,7 @@ const mockPool = new Pool({ connectionString: url, max: 12 });
 let mockDocSource = 'client';
 let mockMaxLines = 0;
 let mockStockPercent = 100;
+let mockPriceByCode = {};
 jest.mock('../../src/db', () => ({
   pool: mockPool,
   query: (...args) => mockPool.query(...args),
@@ -25,7 +26,9 @@ jest.mock('../../src/db', () => ({
     finally { client.release(); }
   },
 }));
-jest.mock('../../src/utils/priceHelper', () => ({ getProductPriceLocalx: jest.fn().mockResolvedValue({ success: true, data: [{ price: 100 }] }) }));
+jest.mock('../../src/utils/priceHelper', () => ({
+  getProductPriceLocalx: jest.fn(async code => ({ success: true, data: [mockPriceByCode[code] || { price: 100 }] })),
+}));
 jest.mock('../../src/utils/adminPermissions', () => ({ getAdminPermissionsForUser: async code => ({ is_superadmin: false, permissions: code === 'EMP' ? ['admin.orders'] : [] }) }));
 jest.mock('../../src/utils/marketplaceSalesSettings', () => ({
   getOrderDocSource: async () => mockDocSource,
@@ -47,7 +50,12 @@ const auth = (code = 'C1', typ = 'customer') => `Bearer ${signToken({ sub: code,
 const item = (code = 'P1', qty = 1) => ({ item_code: code, item_name: code, unit_code: 'EA', item_type: 0, qty, price: 100, sum_amount: 100 * qty, wh_code: 'W1', shelf_code: 'S1' });
 const payload = (id = 'req-1', items = [item()]) => ({ request_id: id, doc_no: `MQT-${id.replace(/:/g, '-')}`, cust_code: 'C1', items, vat_type: 1, vat_rate: 7, address: 'ที่อยู่ทดสอบ', telephone: '053 562 595', emp_code: 'FAKE' });
 const send = body => request(app).post('/sendorder').set('Authorization', auth()).send(body);
-const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code: 'S2' }]) => request(app).post(`/admin/pending-orders/${doc}/confirm`).set('Authorization', auth('EMP', 'employee')).send({ allocations, sale_code: 'FAKE', items: [{ price: 0 }] });
+const confirm = async (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code: 'S2' }]) => {
+  const quoted = await request(app).post(`/admin/pending-orders/${doc}/quote`).set('Authorization', auth('EMP', 'employee')).send({ allocations });
+  if (quoted.status !== 200) return quoted;
+  return request(app).post(`/admin/pending-orders/${doc}/confirm`).set('Authorization', auth('EMP', 'employee'))
+    .send({ allocations, pricing_fingerprint: quoted.body.data.fingerprint, sale_code: 'FAKE', items: [{ price: 0 }] });
+};
 
 (url ? describe : describe.skip)('pending order transactions (real PostgreSQL)', () => {
   beforeAll(async () => {
@@ -58,7 +66,7 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
     await runMigrations({ pool: mockPool, migrations: ['create_order_document.sql', 'create_pending_order.sql'] });
   });
   beforeEach(async () => {
-    mockDocSource = 'client'; mockMaxLines = 0; mockStockPercent = 100;
+    mockDocSource = 'client'; mockMaxLines = 0; mockStockPercent = 100; mockPriceByCode = {};
     await mockPool.query('TRUNCATE ic_trans,ic_trans_detail,ic_trans_shipment,marketplace_pending_order,marketplace_order_request,marketplace_order_document,ap_ar_trans_detail');
     await mockPool.query("UPDATE ic_inventory_detail SET dimension_38=''");
     await mockPool.query("UPDATE ic_inventory SET name_eng_2='' WHERE code LIKE 'P1-%'");
@@ -102,15 +110,29 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
     }
   });
 
-  it('rejects outside-group, unit/tax mismatch, missing quantities and changed master without partial QT', async () => {
+  it('rejects outside-group, incompatible units, missing quantities and changed master without partial QT', async () => {
     await variants();
     const doc = (await send(payload('guard', [item('P1', 10)]))).body.doc_no;
-    for (const [code, qty] of [['P2', 10], ['P1-UNIT', 10], ['P1-TAX', 10], ['P1-A', 9], ['P1-A', 11]]) {
+    for (const [code, qty] of [['P2', 10], ['P1-UNIT', 10], ['P1-A', 9], ['P1-A', 11]]) {
       expect((await confirm(doc, [{ line_number: 1, item_code: code, qty, wh_code: 'W1', shelf_code: 'S1' }])).status).toBe(400);
     }
     await mockPool.query("UPDATE ic_inventory SET name_eng_2='OTHER' WHERE code='P1-A'");
     expect((await confirm(doc, [{ line_number: 1, item_code: 'P1-A', qty: 10, wh_code: 'W1', shelf_code: 'S1' }])).status).toBe(400);
     expect((await mockPool.query('SELECT * FROM ic_trans WHERE trans_flag=30')).rows).toHaveLength(0);
+  });
+
+  it('uses the selected product price and tax type for QT while leaving MPR immutable', async () => {
+    await variants();
+    mockPriceByCode = { 'P1-TAX': { price: 130, defaultDiscount: '10%' } };
+    const submitted = await send(payload('actual-tax-price', [item('P1', 2)]));
+    const result = await confirm(submitted.body.doc_no, [{ line_number: 1, item_code: 'P1-TAX', qty: 2, wh_code: 'W1', shelf_code: 'S1' }]);
+    expect(result.status).toBe(200);
+    const detail = (await mockPool.query('SELECT * FROM ic_trans_detail WHERE trans_flag=30')).rows[0];
+    expect(detail).toMatchObject({ item_code: 'P1-TAX', price: '130', discount: '10%', discount_amount: '26', sum_amount: '234', tax_type: 1, total_vat_value: '0' });
+    const qt = (await mockPool.query('SELECT * FROM ic_trans WHERE trans_flag=30')).rows[0];
+    expect(qt).toMatchObject({ total_value: '260', total_discount: '26', total_before_vat: '0', total_vat_value: '0', total_except_vat: '234', total_amount: '234' });
+    const request = (await mockPool.query('SELECT * FROM ic_trans WHERE trans_flag=300')).rows[0];
+    expect(request).toMatchObject({ total_amount: '200' });
   });
 
   it('counts the original display quantity for maximum allowance after physical-code confirmation', async () => {
@@ -172,7 +194,7 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
       expect(result.body.data.options.find(row => row.item_code === 'P1').balance_qty).toBe(99);
       expect(result.body.data.options.find(row => row.item_code === 'P1-B').balance_qty).toBe(-3);
       expect(result.body.data.options.find(row => row.item_code === 'P1-C').locations[0]).toMatchObject({ wh_code: 'W2', shelf_code: 'S2', balance_qty: 5 });
-      expect(result.body.data.options.find(row => row.item_code === 'P1-TAX').selectable).toBe(false);
+      expect(result.body.data.options.find(row => row.item_code === 'P1-TAX').selectable).toBe(true);
       await mockPool.query("DELETE FROM test_physical WHERE ic_code LIKE 'P1-%'");
       expect(Number((await read('W1'))[0].balance_qty)).toBe(0); // No fallback to parent's 99.
     } finally { await mockPool.query("DELETE FROM ic_unit_use WHERE ic_code='P1' AND code='BOX'"); }
@@ -340,16 +362,20 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
     expect((await mockPool.query('SELECT * FROM ic_trans WHERE trans_flag=31')).rows).toHaveLength(0);
   });
 
-  it('preserves the submitted discount and VAT snapshot without reading current product prices or taxes', async () => {
+  it('keeps the MPR snapshot immutable while re-pricing the selected QT product at confirmation', async () => {
     const response = await send({ ...payload('snapshot'), discount_word: '10%', discount_type: 1 });
     expect(response.status).toBe(200);
     const fields = 'total_value,total_discount,total_before_vat,total_vat_value,total_after_vat,total_except_vat,total_amount';
     const original = (await mockPool.query(`SELECT ${fields} FROM ic_trans WHERE trans_flag=300`)).rows[0];
     await mockPool.query("UPDATE ic_inventory SET tax_type=1 WHERE code='P1'");
+    mockPriceByCode = { P1: { price: 130, defaultDiscount: '10%' } };
     try {
       expect((await confirm(response.body.doc_no)).status).toBe(200);
       const saved = (await mockPool.query(`SELECT ${fields} FROM ic_trans WHERE trans_flag=30`)).rows[0];
-      expect(saved).toEqual(original);
+      const detail = (await mockPool.query('SELECT price,discount,discount_amount,sum_amount,tax_type FROM ic_trans_detail WHERE trans_flag=30')).rows[0];
+      expect(detail).toEqual({ price: '130', discount: '10%', discount_amount: '13', sum_amount: '117', tax_type: 1 });
+      expect(saved).toMatchObject({ total_value: '130', total_discount: '13', total_except_vat: '117', total_amount: '117' });
+      expect((await mockPool.query(`SELECT ${fields} FROM ic_trans WHERE trans_flag=300`)).rows[0]).toEqual(original);
     } finally { await mockPool.query("UPDATE ic_inventory SET tax_type=0 WHERE code='P1'"); }
   });
 
@@ -367,7 +393,7 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
     expect(result.skipped).toHaveLength(2);
   });
 
-  it.each([[0, 0, 0], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1], [2, 0, 0], [2, 1, 1]])('preserves full snapshot totals when splitting discounted mixed VAT lines (%s/%s/%s)', async (vat_type, discount_type, discount_vat_type) => {
+  it.each([[0, 0, 0], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1], [2, 0, 0], [2, 1, 1]])('keeps MPR snapshot and makes split QT header totals equal the current quote (%s/%s/%s)', async (vat_type, discount_type, discount_vat_type) => {
     await variants();
     mockDocSource = 'server'; mockMaxLines = 1;
     await mockPool.query("UPDATE ic_inventory SET tax_type=1 WHERE code='P2'");
@@ -376,15 +402,20 @@ const confirm = (doc, allocations = [{ line_number: 1, wh_code: 'W2', shelf_code
       expect(response.status).toBe(200);
       const fields = ['total_value', 'total_discount', 'total_before_vat', 'total_vat_value', 'total_after_vat', 'total_except_vat', 'total_amount'];
       const original = (await mockPool.query(`SELECT ${fields.join(',')} FROM ic_trans WHERE trans_flag=300`)).rows[0];
-      const result = await confirm(response.body.doc_no, [
+      const allocations = [
         { line_number: 1, item_code: 'P1-A', qty: 0.333, wh_code: 'W1', shelf_code: 'S1' },
         { line_number: 1, item_code: 'P1-B', qty: 0.667, wh_code: 'W2', shelf_code: 'S2' },
         { line_number: 2, wh_code: 'W1', shelf_code: 'S1' },
-      ]);
+      ];
+      const quoted = await request(app).post(`/admin/pending-orders/${response.body.doc_no}/quote`).set('Authorization', auth('EMP', 'employee')).send({ allocations });
+      expect(quoted.status).toBe(200);
+      const result = await request(app).post(`/admin/pending-orders/${response.body.doc_no}/confirm`).set('Authorization', auth('EMP', 'employee'))
+        .send({ allocations, pricing_fingerprint: quoted.body.data.fingerprint });
       expect(result.status).toBe(200);
       expect(result.body.sub_doc_nos).toHaveLength(3);
       const saved = (await mockPool.query(`SELECT ${fields.map(field => `SUM(${field}) AS ${field}`).join(',')} FROM ic_trans WHERE trans_flag=30`)).rows[0];
-      for (const field of fields) expect(Number(saved[field])).toBe(Number(original[field]));
+      for (const field of fields) expect(Number(saved[field])).toBe(Number(quoted.body.data.totals[field]));
+      expect((await mockPool.query(`SELECT ${fields.join(',')} FROM ic_trans WHERE trans_flag=300`)).rows[0]).toEqual(original);
     } finally { await mockPool.query("UPDATE ic_inventory SET tax_type=0 WHERE code='P2'"); }
   });
 });

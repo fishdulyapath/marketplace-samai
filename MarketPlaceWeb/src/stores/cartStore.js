@@ -752,8 +752,7 @@ export const useCartStore = defineStore('cart', () => {
                 // เพิ่มฟิลด์ใหม่สำหรับวันที่จัดส่งและเครดิต
                 send_date: checkoutData.send_date || null,
                 send_day: checkoutData.send_day !== null && checkoutData.send_day !== undefined ? String(checkoutData.send_day) : null,
-                // ข้อมูลรับเองที่สาขา — server เอาไปต่อท้ายหมายเหตุของ QT
-                pickup_branch: checkoutData.pickup_branch || '',
+                // ข้อมูลรับเอง — server เอาไปต่อท้ายหมายเหตุของ QT
                 pickup_date: checkoutData.pickup_date || '',
                 pickup_time_slot: checkoutData.pickup_time_slot || '',
                 pickup_receiver: checkoutData.pickup_receiver || '',

@@ -1,4 +1,5 @@
 const { normalizeAllocations, allocateLines } = require('./pendingAllocations');
+const { quotePendingQt, summarize } = require('./pendingQuote');
 const { splitItemsIntoDocuments } = require('./orderDocSplit');
 const { resolveMainDocNo, formatSubDocNo } = require('./orderDocNo');
 const { getOrderDocPattern, getErpMaxLinesPerDoc } = require('./marketplaceSalesSettings');
@@ -56,60 +57,48 @@ async function insertColumns(client, table, columns, values) {
   await client.query(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(',')})`, columns.map(key => values[key] ?? null));
 }
 
-// A request can become multiple QTs. Allocate the saved header discount, not its
-// percentage expression against only the first chunk (which would change the price).
-function distributeMoney(amount, weights) {
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  let cumulative = 0;
-  let assigned = 0;
-  return weights.map((weight, index) => {
-    cumulative += weight;
-    const target = total ? Math.round(Number(amount) * 100 * cumulative / total) : index === 0 ? Math.round(Number(amount) * 100) : assigned;
-    const value = (target - assigned) / 100;
-    assigned = target;
-    return value;
+function quoteTotals(chunks, header) {
+  return chunks.map(chunk => {
+    const totals = summarize(chunk.items, header);
+    return {
+      totalValue: totals.total_value,
+      totalDiscount: totals.total_discount,
+      totalBeforeVat: totals.total_before_vat,
+      totalVatValue: totals.total_vat_value,
+      totalAfterVat: totals.total_after_vat,
+      totalExceptVat: totals.total_except_vat,
+      totalAmount: totals.total_amount,
+    };
   });
 }
 
-function quoteTotals(chunks, header, metadata, taxMap, summarizeOrderVat) {
-  const taxable = chunks.map(chunk => chunk.items.reduce((sum, row) => sum + (Number(row.tax_type) === 1 ? 0 : Number(row.sum_amount)), 0));
-  const exempt = chunks.map(chunk => chunk.items.reduce((sum, row) => sum + (Number(row.tax_type) === 1 ? Number(row.sum_amount) : 0), 0));
-  const discount = Number(header.total_discount || 0);
-  let discounts;
-  if (Number(metadata.discount_type) === 1 && [0, 1].includes(Number(header.vat_type))) {
-    const exemptDiscount = exempt.reduce((a, b) => a + b, 0) - Number(header.total_except_vat);
-    const taxParts = distributeMoney(discount - exemptDiscount, taxable);
-    const exemptParts = distributeMoney(exemptDiscount, exempt);
-    discounts = taxParts.map((amount, i) => amount + exemptParts[i]);
-  } else {
-    discounts = distributeMoney(discount, taxable.map((value, i) => value + exempt[i]));
-  }
-  const totals = chunks.map((chunk, i) => summarizeOrderVat(chunk.items, taxMap, Number(header.vat_type), Number(header.vat_rate),
-    String(discounts[i]), metadata.discount_type, metadata.discount_vat_type));
-  // Reconcile per-document rounding against the immutable request snapshot.
-  const fields = { totalValue: 'total_value', totalDiscount: 'total_discount', totalBeforeVat: 'total_before_vat', totalVatValue: 'total_vat_value', totalAfterVat: 'total_after_vat', totalExceptVat: 'total_except_vat' };
-  for (const [key, column] of Object.entries(fields)) {
-    const weights = key === 'totalExceptVat' ? exempt : ['totalBeforeVat', 'totalVatValue', 'totalAfterVat'].includes(key) ? taxable : taxable.map((value, i) => value + exempt[i]);
-    const index = Math.max(0, weights.findLastIndex(weight => weight > 0));
-    const delta = Math.round((Number(header[column]) - totals.reduce((sum, row) => sum + row[key], 0)) * 100) / 100;
-    totals[index][key] = Math.round((totals[index][key] + delta) * 100) / 100;
-  }
-  for (const total of totals) {
-    total.totalAmount = Math.round((Number(header.vat_type) === 0
-      ? total.totalAfterVat + total.totalExceptVat - (Number(metadata.discount_type) === 1 ? 0 : total.totalDiscount)
-      : total.totalValue - total.totalDiscount) * 100) / 100;
-  }
-  return totals;
-}
-
-async function confirmRequest(client, pending, allocations, employeeCode, summarizeOrderVat) {
-  if (pending.status === 'confirmed') return { duplicate: true, doc_no: pending.qt_doc_no, sub_doc_nos: pending.qt_doc_nos };
-  if (pending.status !== 'pending') throw fail('คำขอนี้ถูกยกเลิกหรือปฏิเสธแล้ว กรุณารีเฟรชรายการ');
+async function quoteRequest(client, pending, allocations) {
+  if (pending.status !== 'pending') throw fail('คำขอนี้ถูกดำเนินการแล้ว กรุณารีเฟรชรายการ');
   const { header, rows } = await readRequest(client, pending.doc_no);
   if (Number(header.last_status || 0) !== 0) throw fail('คำขอนี้ปิดงานแล้ว');
   const roots = rootLines(rows, pending.metadata);
   const selected = validateAllocations(roots, allocations);
   const allocated = await allocateLines(client, roots, selected);
+  return quotePendingQt(pending, header, allocated);
+}
+
+function publicQuote(quote) {
+  const { _rows, ...result } = quote;
+  return result;
+}
+
+async function confirmRequest(client, pending, allocations, employeeCode, pricingFingerprint) {
+  if (pending.status === 'confirmed') return { duplicate: true, doc_no: pending.qt_doc_no, sub_doc_nos: pending.qt_doc_nos };
+  if (pending.status !== 'pending') throw fail('คำขอนี้ถูกยกเลิกหรือปฏิเสธแล้ว กรุณารีเฟรชรายการ');
+  const quote = await quoteRequest(client, pending, allocations);
+  if (!pricingFingerprint || pricingFingerprint !== quote.fingerprint) {
+    const error = fail('ราคา หรือเงื่อนไขสินค้าเปลี่ยน กรุณาตรวจสอบยอด QT ล่าสุดอีกครั้ง');
+    error.code = 'PENDING_QT_PRICE_CHANGED';
+    error.quote = publicQuote(quote);
+    throw error;
+  }
+  const { header } = await readRequest(client, pending.doc_no);
+  const allocated = quote._rows;
   const date = serverDocDate();
   const time = serverDocTime();
   const serverNumber = pending.doc_source === 'server';
@@ -124,9 +113,8 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
   const numbers = chunks.map((_, i) => formatSubDocNo(main, i + 1, chunks.length));
   const existing = await client.query('SELECT doc_no FROM ic_trans WHERE doc_no=ANY($1) LIMIT 1', [numbers]);
   if (existing.rows.length) throw fail('เลข QT ถูกใช้แล้ว กรุณาติดต่อผู้ดูแลระบบ');
-  const taxMap = new Map(allocated.flatMap(row => [row, ...row.sub_item]).map(row => [row.item_code, Number(row.tax_type || 0)]));
   const audit = [];
-  const documentTotals = quoteTotals(chunks, header, pending.metadata, taxMap, summarizeOrderVat);
+  const documentTotals = quoteTotals(chunks, header);
   for (let i = 0; i < chunks.length; i++) {
     const totals = documentTotals[i];
     await insertColumns(client, 'ic_trans', HEADER_COLUMNS, {
@@ -140,7 +128,14 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
     let lineNumber = 0;
     for (const root of chunks[i].items) {
       const location = { wh_code: root.wh_code, shelf_code: root.shelf_code };
-      audit.push({ source_line_number: root.__source_line, source_item_code: root.__source_item, qt_doc_no: numbers[i], qt_line_number: lineNumber + 1, item_code: root.item_code, qty: root.qty, ...location });
+      audit.push({
+        source_line_number: root.__source_line, source_item_code: root.__source_item,
+        qt_doc_no: numbers[i], qt_line_number: lineNumber + 1, item_code: root.item_code, qty: root.qty, ...location,
+        price: root.price, discount: root.discount || '', discount_amount: root.discount_amount,
+        sum_amount: root.sum_amount, tax_type: root.tax_type,
+        price_exclude_vat: root.price_exclude_vat, sum_amount_exclude_vat: root.sum_amount_exclude_vat,
+        total_vat_value: root.total_vat_value, pricing_date: quote.pricing_date,
+      });
       for (const row of [root, ...root.sub_item]) {
         await insertColumns(client, 'ic_trans_detail', DETAIL_COLUMNS, {
           ...row, ...location, trans_flag: 30, doc_no: numbers[i], doc_date: date, doc_time: time,
@@ -160,7 +155,7 @@ async function confirmRequest(client, pending, allocations, employeeCode, summar
     `UPDATE marketplace_pending_order SET status='confirmed', qt_doc_no=$2, qt_doc_nos=$3::jsonb, acted_by=$4, acted_at=NOW(), metadata=metadata || jsonb_build_object('confirmed_allocations',$5::jsonb) WHERE doc_no=$1`,
     [pending.doc_no, main, JSON.stringify(numbers), employeeCode, JSON.stringify(audit)]);
   await client.query('UPDATE ic_trans SET last_status=1 WHERE doc_no=$1 AND trans_flag=300', [pending.doc_no]);
-  return { duplicate: false, doc_no: main, sub_doc_nos: numbers, request_doc_no: pending.doc_no };
+  return { duplicate: false, doc_no: main, sub_doc_nos: numbers, request_doc_no: pending.doc_no, quote: publicQuote(quote) };
 }
 
 async function closeRequest(client, pending, status, actor, reason = '') {
@@ -171,4 +166,4 @@ async function closeRequest(client, pending, status, actor, reason = '') {
   return { duplicate: false };
 }
 
-module.exports = { requestMetadata, rootLines, validateAllocations, lockRequest, readRequest, confirmRequest, closeRequest, fail };
+module.exports = { requestMetadata, rootLines, validateAllocations, lockRequest, readRequest, quoteRequest, publicQuote, confirmRequest, closeRequest, fail };

@@ -60,11 +60,32 @@ PendingOrderService.options = async (_, line) => ({
         unit_code: products[line - 1].unit_code,
         is_original: index === 0,
         balance_qty: [0, 6, 24, 12][index],
+        tax_type: index === 3 ? 1 : 0,
+        price: [39, 42, 45, 47][index],
+        default_discount: index === 2 ? '5%' : '',
+        price_available: true,
         selectable: !(fixture.has('changedMaster') && index === 1),
         disabled_reason: fixture.has('changedMaster') && index === 1 ? 'หน่วย master เปลี่ยน ไม่ตรงกับต้นทาง' : '',
         locations: [{ wh_code: 'ST01', wh_name: 'คลังหน้าร้าน', shelf_code: 'LC01', shelf_name: 'โซนขายปลีก', balance_qty: [0, 6, 24, 12][index] }]
     }))
 });
+PendingOrderService.quote = async (_, allocations) => {
+    const items = allocations.map((row) => ({
+        source_line: row.line_number,
+        source_item: products[row.line_number - 1].item_code,
+        item_code: row.item_code || products[row.line_number - 1].item_code,
+        item_name: products[row.line_number - 1].item_name,
+        unit_code: products[row.line_number - 1].unit_code,
+        qty: row.qty || products[row.line_number - 1].qty,
+        wh_code: row.wh_code,
+        shelf_code: row.shelf_code,
+        price: 45,
+        discount: '',
+        tax_type: 0,
+        sum_amount: 45 * Number(row.qty || products[row.line_number - 1].qty)
+    }));
+    return { fingerprint: 'preview-price-token', items, totals: { total_amount: items.reduce((sum, item) => sum + item.sum_amount, 0) } };
+};
 PendingOrderService.confirm = async (doc) => {
     queue = queue.filter((row) => row.doc_no !== doc);
     return { doc_no: 'QT-DEMO-001' };

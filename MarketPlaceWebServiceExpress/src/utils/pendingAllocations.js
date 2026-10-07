@@ -1,5 +1,6 @@
 const { checkErpCodes, isSafeErpCode } = require('./erpCodeGuard');
 const { readPhysicalStock } = require('./groupedStock');
+const { getProductPriceLocalx } = require('./priceHelper');
 
 const invalid = message => Object.assign(new Error(message), { statusCode: 400 });
 function quantityAtoms(value) {
@@ -35,7 +36,12 @@ function normalizeAllocations(roots, allocations) {
     const selected = result.get(Number(root.line_number));
     if (!selected.length || selected.reduce((sum, row) => sum + row.atoms, 0n) !== quantityAtoms(root.qty)) throw invalid(`จำนวนจัดสรร ${root.item_code} ต้องรวมเท่ากับ ${root.qty} ${root.unit_code}`);
     if (selected.length > 1 && selected.some(row => row.legacy)) throw invalid('ข้อมูลจัดสรรแบบเดิมใช้ได้เพียงหนึ่งรายการต่อบรรทัด');
-    if (String(root.item_type) === '3' && (selected.length !== 1 || selected[0].item_code !== root.item_code)) throw invalid('สินค้าชุดยังไม่รองรับการเปลี่ยนหรือแบ่งรหัส');
+    if ((String(root.item_type) === '3' || Number(root.is_permium) === 1)
+      && (selected.length !== 1 || selected[0].item_code !== root.item_code)) {
+      throw invalid(Number(root.is_permium) === 1
+        ? 'ของแถมยังไม่รองรับการเปลี่ยนหรือแบ่งรหัส'
+        : 'สินค้าชุดยังไม่รองรับการเปลี่ยนหรือแบ่งรหัส');
+    }
     const keys = selected.map(row => `${row.item_code}\0${row.wh_code}\0${row.shelf_code}`);
     if (new Set(keys).size !== keys.length) throw invalid('สินค้า คลัง และที่เก็บซ้ำกัน กรุณารวมจำนวนในรายการเดียว');
   }
@@ -48,10 +54,11 @@ function conversion(unit) {
   return stand > 0 && divide > 0 ? stand / divide : null;
 }
 
-async function loadOptions(client, source, { lock = false, stock = false } = {}) {
+async function loadOptions(client, source, { lock = false, stock = false, pricing = null } = {}) {
   const inventory = await client.query(
-    `SELECT code,name_1,name_eng_2,COALESCE(item_type,0) AS item_type,COALESCE(tax_type,0) AS tax_type
-     FROM ic_inventory WHERE code=$1 OR name_eng_2=$1 ORDER BY code ${lock ? 'FOR SHARE' : ''}`, [source.item_code]);
+    `SELECT code,name_1,name_eng_2,COALESCE(item_type,0) AS item_type,COALESCE(tax_type,0) AS tax_type,
+      COALESCE((SELECT barcode FROM ic_inventory_barcode b WHERE b.ic_code=ic_inventory.code AND b.unit_code=$2 ORDER BY barcode LIMIT 1),'') AS barcode
+     FROM ic_inventory WHERE code=$1 OR name_eng_2=$1 ORDER BY code ${lock ? 'FOR SHARE' : ''}`, [source.item_code, source.unit_code]);
   const codes = inventory.rows.map(row => row.code);
   const units = await client.query(`SELECT ic_code,code,stand_value,divide_value,ratio FROM ic_unit_use WHERE ic_code=ANY($1) AND code=$2 ${lock ? 'FOR SHARE' : ''}`, [codes, source.unit_code]);
   const byCode = new Map(units.rows.map(row => [row.ic_code, row]));
@@ -63,15 +70,39 @@ async function loadOptions(client, source, { lock = false, stock = false } = {})
     let reason = '';
     if (!isSafeErpCode(row.code)) reason = 'รหัสสินค้ามีอักขระที่ไม่รองรับ';
     else if (!original && (String(source.item_type) === '3' || Number(row.item_type) === 3)) reason = 'ไม่รองรับการเปลี่ยนเป็นสินค้าชุด';
-    else if (!original && Number(row.tax_type) !== Number(source.tax_type || 0)) reason = 'ประเภทภาษีไม่ตรงกับคำขอ';
     else if (!original && (!sourceFactor || !conversion(unit) || Math.abs(conversion(unit) - sourceFactor) > 1e-9 || Math.abs((Number(unit.ratio) || conversion(unit)) - sourceRatio) > 1e-9)) reason = 'หน่วยหรืออัตราแปลงไม่ตรงกับคำขอ';
     return {
       item_code: row.code, item_name: row.name_1 || row.code, is_original: original,
       unit_code: source.unit_code, stand_value: unit?.stand_value, divide_value: unit?.divide_value,
       unit_ratio: Number(unit?.ratio) > 0 ? Number(unit.ratio) : conversion(unit),
+      tax_type: Number(row.tax_type || 0), barcode: row.barcode || '',
+      price: null, default_discount: '', price_available: null,
       selectable: !reason, disabled_reason: reason, balance_qty: null, locations: [],
     };
   }).sort((a, b) => Number(b.is_original) - Number(a.is_original) || a.item_code.localeCompare(b.item_code));
+  if (pricing) {
+    await Promise.all(options.map(async option => {
+      if (!option.selectable) return;
+      try {
+        const result = await getProductPriceLocalx(option.item_code, option.unit_code, String(pricing.qty || source.qty || 1),
+          pricing.custCode, pricing.vatType, pricing.vatRate, pricing.saleType, option.barcode, pricing.docDate);
+        const price = Number(result?.data?.[0]?.price);
+        if (!Number.isFinite(price) || price <= 0) {
+          option.selectable = false;
+          option.disabled_reason = 'ไม่พบราคาปัจจุบันของสินค้านี้';
+          option.price_available = false;
+          return;
+        }
+        option.price = price;
+        option.default_discount = String(result.data[0]?.defaultDiscount || '');
+        option.price_available = true;
+      } catch (_) {
+        option.selectable = false;
+        option.disabled_reason = 'โหลดราคาสินค้าไม่สำเร็จ';
+        option.price_available = false;
+      }
+    }));
+  }
   if (!stock) return { options };
   let stockError = '';
   try {
@@ -116,34 +147,26 @@ async function allocateLines(client, roots, selected) {
   const locations = new Set();
   for (const root of roots) {
     const allocations = selected.get(Number(root.line_number));
-    const isSet = String(root.item_type) === '3';
-    const { options } = isSet ? { options: [] } : await loadOptions(client, root, { lock: true });
-    const weights = allocations.map(row => row.qty);
-    const amounts = Object.fromEntries(['sum_amount', 'sum_amount_exclude_vat', 'total_vat_value', 'discount_amount'].map(key => [key, distributeAmount(root[key], weights)]));
-    const grossDiscount = distributeAmount(Number(root.price) * Number(root.qty) - Number(root.sum_amount), weights);
+    const fixed = String(root.item_type) === '3' || Number(root.is_permium) === 1;
+    const { options } = fixed ? { options: [] } : await loadOptions(client, root, { lock: true });
     for (let i = 0; i < allocations.length; i++) {
       const allocation = allocations[i];
       const option = options.find(row => row.item_code === allocation.item_code);
-      if (!isSet && (!option || !option.selectable)) throw invalid(option?.disabled_reason || `สินค้า ${allocation.item_code} ไม่อยู่ในกลุ่ม ${root.item_code}`);
+      if (!fixed && (!option || !option.selectable)) throw invalid(option?.disabled_reason || `สินค้า ${allocation.item_code} ไม่อยู่ในกลุ่ม ${root.item_code}`);
       const key = `${allocation.wh_code}\0${allocation.shelf_code}`;
       if (!locations.has(key)) {
         const valid = await client.query('SELECT 1 FROM ic_warehouse w JOIN ic_shelf s ON s.whcode=w.code WHERE w.code=$1 AND s.code=$2 LIMIT 1', [allocation.wh_code, allocation.shelf_code]);
         if (!valid.rows.length) throw invalid(`ไม่พบคลัง/ที่เก็บ ${allocation.wh_code} / ${allocation.shelf_code} ใน master`);
         locations.add(key);
       }
-      const changed = allocation.item_code !== root.item_code;
-      const barcode = changed ? await client.query('SELECT barcode FROM ic_inventory_barcode WHERE ic_code=$1 AND unit_code=$2 ORDER BY barcode LIMIT 1', [allocation.item_code, root.unit_code]) : null;
       const row = { ...root, item_code: allocation.item_code, qty: allocation.qty, wh_code: allocation.wh_code, shelf_code: allocation.shelf_code,
         __source_line: Number(root.line_number), __source_item: root.item_code,
-        item_name: changed ? option.item_name : root.item_name,
-        barcode: changed ? barcode.rows[0]?.barcode || '' : root.barcode,
-        stand_value: changed ? option.stand_value : root.stand_value,
-        divide_value: changed ? option.divide_value : root.divide_value,
+        item_name: fixed ? root.item_name : option.item_name,
+        barcode: fixed ? root.barcode : option.barcode,
+        stand_value: fixed ? root.stand_value : option.stand_value,
+        divide_value: fixed ? root.divide_value : option.divide_value,
+        tax_type: fixed ? root.tax_type : option.tax_type,
       };
-      if (!isSet) {
-        for (const key of Object.keys(amounts)) row[key] = amounts[key][i];
-        if (allocations.length > 1 && root.discount) row.discount = String(grossDiscount[i]);
-      }
       result.push(row);
     }
   }

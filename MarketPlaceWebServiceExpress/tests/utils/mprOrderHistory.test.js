@@ -77,6 +77,10 @@ test('confirmed follows mixed ERP state, preserves invoice identity and requeste
     inv_doc_no: 'INV2', delivery_image_doc_no: 'INV2', invoiced_amount: 65, balance: 65, total_amount: 130,
     doc_date: '2026-09-01', send_date: '2026-09-03', send_day: 2, can_cancel: false });
 });
+test('confirmed MPR displays the linked QT total while retaining its immutable request total', () => {
+  const result = projectHeader(pending, { total_amount: 200, total_vat_value: 14 }, { total_amount: 234, total_vat_value: 0 });
+  expect(result).toMatchObject({ total_amount: 234, document_total_amount: 234, qt_total_amount: 234, request_total_amount: 200, request_total_vat_value: 14 });
+});
 test('missing operational documents cannot be cancelled as QT', () => {
   expect(projectHeader(pending, {}).can_cancel).toBe(false);
 });

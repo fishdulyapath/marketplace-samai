@@ -105,18 +105,16 @@ function isPreorderDocument(docNo, remark) {
   return /^PREQT/i.test(String(docNo || '').trim()) || hasPreorderMarker(remark);
 }
 
-// รับเองที่สาขา (รีวิว 260908 สไลด์ 6) — ลูกค้าระบุว่า "ข้อมูลจะอยู่ที่ หมายเหตุ ขอ QT"
+// รับเอง (รีวิว 260908 สไลด์ 6) — ลูกค้าระบุว่า "ข้อมูลจะอยู่ที่ หมายเหตุ ขอ QT"
 // จึงประกอบเป็นข้อความบรรทัดเดียวไปต่อกับหมายเหตุ ไม่ได้เพิ่มคอลัมน์ใหม่ใน ic_trans
 // (คู่กับ MarketPlaceWeb/src/utils/pickupSlots.js ที่ประกอบข้อความเดียวกันไว้โชว์)
 function buildPickupRemark(pickup = {}) {
   const parts = [];
-  const branch = String(pickup.branch || '').trim();
   const date = String(pickup.date || '').trim();
   const slot = String(pickup.timeSlot || '').trim();
   const receiver = String(pickup.receiver || '').trim();
   const vehicle = String(pickup.vehicle || '').trim();
 
-  if (branch) parts.push(`สาขา${branch}`);
   if (date) parts.push(date);
   if (slot) parts.push(slot);
   if (receiver) parts.push(`ผู้รับ: ${receiver}`);
@@ -127,7 +125,7 @@ function buildPickupRemark(pickup = {}) {
 
 // ใบเสนอราคาใน SML ผู้ใช้ ERP ดูช่อง remark ช่องเดียวเป็นหลัก
 // ส่งให้ (send_type=1) จึงรวม "ส่งให้ + ที่อยู่ + หมายเหตุลูกค้า" ไว้ในช่องเดียว
-// รับเอง (send_type=0) รวม "รับเอง + สาขา/วัน/เวลา/ผู้รับ/ทะเบียน + หมายเหตุ"
+// รับเอง (send_type=0) รวม "รับเอง + วัน/เวลา/ผู้รับ/ทะเบียน + หมายเหตุ"
 // (ที่อยู่ฉบับเต็มยังเก็บแยกที่ ic_trans_shipment เหมือนเดิม)
 function buildDeliveryRemark(sendType, shipAddress, remark, pickup = {}) {
   if (String(sendType) === '1') {
@@ -504,9 +502,8 @@ router.post('/sendorder', pendingIdentity, async (req, res) => {
     const shipAddress = String(obj.address || '').trim().slice(0, 255);
     const shipAddressName = String(obj.address_name || '').trim().slice(0, 1000);
     const shipTelephone = String(obj.telephone || '').trim().slice(0, 100);
-    // ข้อมูลรับเองที่สาขา — ตัดความยาวกันหมายเหตุบวมเกินคอลัมน์ ic_trans.remark
+    // ข้อมูลรับเอง — ตัดความยาวกันหมายเหตุบวมเกินคอลัมน์ ic_trans.remark
     const pickupInfo = {
-      branch: String(obj.pickup_branch || '').trim().slice(0, 60),
       date: String(obj.pickup_date || '').trim().slice(0, 20),
       timeSlot: String(obj.pickup_time_slot || '').trim().slice(0, 20),
       receiver: String(obj.pickup_receiver || '').trim().slice(0, 80),

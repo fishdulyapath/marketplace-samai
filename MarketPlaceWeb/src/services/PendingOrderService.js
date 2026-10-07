@@ -13,8 +13,12 @@ export default {
         const { data } = await api.get(path(docNo));
         return data.data;
     },
-    async confirm(docNo, allocations) {
-        const { data } = await api.post(`${adminPath(docNo)}/confirm`, { allocations });
+    async quote(docNo, allocations) {
+        const { data } = await api.post(`${adminPath(docNo)}/quote`, { allocations });
+        return data.data;
+    },
+    async confirm(docNo, allocations, pricingFingerprint) {
+        const { data } = await api.post(`${adminPath(docNo)}/confirm`, { allocations, pricing_fingerprint: pricingFingerprint });
         return data;
     },
     async options(docNo, lineNumber) {

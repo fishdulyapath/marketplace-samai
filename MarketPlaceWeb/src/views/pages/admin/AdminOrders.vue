@@ -437,6 +437,7 @@ onBeforeUnmount(() => {
                     <div class="aoc__total">
                         <span class="aoc__total-label">รวมการสั่งซื้อ:</span>
                         <span class="aoc__total-amount">฿{{ formatMoney(order.total_amount) }}</span>
+                        <span v-if="order.document_total_amount !== null && Number(order.request_total_amount) !== Number(order.total_amount)" class="aoc__net">ยอดคำขอเดิม ฿{{ formatMoney(order.request_total_amount) }}</span>
                         <!-- ยกเลิกบางใบ = ยอดข้างบนสูงกว่ายอดที่เก็บได้จริง ต้องบอกให้เห็น -->
                         <span v-if="Number(order.cancelled_amount) > 0 && order.status !== 'cancel'" class="aoc__net">
                             สุทธิ ฿{{ formatMoney(order.active_amount) }}
@@ -468,6 +469,7 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="aod__band-right">
                         <span class="aod__total">฿{{ formatMoney(detailOrder.total_amount) }}</span>
+                        <span v-if="detailOrder.document_total_amount !== null && Number(detailOrder.request_total_amount) !== Number(detailOrder.total_amount)" class="text-xs text-gray-500">ยอดคำขอเดิม ฿{{ formatMoney(detailOrder.request_total_amount) }}</span>
                         <span :class="['aod__tag', statusOf(detailOrder.status).cls]"><i :class="statusOf(detailOrder.status).icon"></i> {{ statusOf(detailOrder.status).label }}</span>
                         <span v-if="isPreorder(detailOrder)" class="aod__preorder"><i class="pi pi-clock"></i> พรีออเดอร์ — ของยังไม่เข้าคลัง</span>
                     </div>

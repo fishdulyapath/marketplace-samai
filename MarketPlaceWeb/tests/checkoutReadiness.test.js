@@ -4,7 +4,6 @@ import { getCheckoutFormIssue } from '../src/utils/checkoutReadiness';
 // ฟอร์มรับเองที่กรอกครบตามรีวิว 260908 สไลด์ 6
 const COMPLETE_PICKUP = {
     deliveryMethod: 'pickup',
-    pickupBranch: 'KHAMTHIANG',
     pickupDate: new Date(2026, 8, 10),
     pickupTimeSlot: '09:00-10:00',
     pickupReceiver: 'สมชาย',
@@ -27,7 +26,7 @@ describe('checkout form readiness', () => {
     });
 
     it('บังคับกรอกข้อมูลรับเองให้ครบทีละช่อง', () => {
-        expect(getCheckoutFormIssue({ deliveryMethod: 'pickup' })).toBe('requirePickupBranch');
+        expect(getCheckoutFormIssue({ deliveryMethod: 'pickup' })).toBe('requirePickupDate');
         expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupDate: null })).toBe('requirePickupDate');
         expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupTimeSlot: '' })).toBe('requirePickupTimeSlot');
         expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupReceiver: '  ' })).toBe('requirePickupReceiver');
@@ -35,6 +34,6 @@ describe('checkout form readiness', () => {
     });
 
     it('ข้อมูลรับเองไม่ถูกบังคับเมื่อเลือกจัดส่ง', () => {
-        expect(getCheckoutFormIssue({ deliveryMethod: 'delivery', deliveryAddress: 'Bangkok', deliveryTelephone: '0812345678', pickupBranch: '' })).toBe('');
+        expect(getCheckoutFormIssue({ deliveryMethod: 'delivery', deliveryAddress: 'Bangkok', deliveryTelephone: '0812345678' })).toBe('');
     });
 });

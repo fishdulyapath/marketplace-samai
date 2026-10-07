@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPickupRemark, getAvailablePickupSlots, getPickupDateRange, PICKUP_BRANCHES } from '@/utils/pickupSlots';
+import { buildPickupRemark, getAvailablePickupSlots, getPickupDateRange } from '@/utils/pickupSlots';
 
 // 8 กันยายน 2569 (ค.ศ. 2026) เวลา 10:15 น.
 const NOW = new Date(2026, 8, 8, 10, 15, 0);
@@ -56,22 +56,16 @@ describe('getPickupDateRange', () => {
 describe('buildPickupRemark', () => {
     it('ประกอบข้อความครบทุกส่วน', () => {
         expect(
-            buildPickupRemark({ branchName: 'คำเที่ยง', dateText: '10/09/2569', timeSlot: '09:00-10:00', receiver: 'สมชาย', vehicle: 'กข 1234' })
-        ).toBe('รับเอง สาขาคำเที่ยง 10/09/2569 09:00-10:00 ผู้รับ: สมชาย ทะเบียน: กข 1234');
+            buildPickupRemark({ dateText: '10/09/2569', timeSlot: '09:00-10:00', receiver: 'สมชาย', vehicle: 'กข 1234' })
+        ).toBe('รับเอง 10/09/2569 09:00-10:00 ผู้รับ: สมชาย ทะเบียน: กข 1234');
     });
 
     it('ข้ามส่วนที่ยังไม่กรอก', () => {
-        expect(buildPickupRemark({ branchName: 'ดอยสะเก็ด', dateText: '10/09/2569' })).toBe('รับเอง สาขาดอยสะเก็ด 10/09/2569');
+        expect(buildPickupRemark({ dateText: '10/09/2569' })).toBe('รับเอง 10/09/2569');
     });
 
     it('ไม่มีข้อมูลเลยคืนค่าว่าง ไม่ใช่คำว่า "รับเอง" ลอยๆ', () => {
         expect(buildPickupRemark({})).toBe('');
         expect(buildPickupRemark()).toBe('');
-    });
-});
-
-describe('PICKUP_BRANCHES', () => {
-    it('มี 2 สาขาตามที่ลูกค้าระบุ', () => {
-        expect(PICKUP_BRANCHES.map((b) => b.name)).toEqual(['คำเที่ยง', 'ดอยสะเก็ด']);
     });
 });

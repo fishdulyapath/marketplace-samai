@@ -1,19 +1,11 @@
-// ── การรับสินค้าเองที่สาขา ────────────────────────────────────────────────
+// ── การรับสินค้าเอง ───────────────────────────────────────────────────────
 //
 // รีวิว 260908 สไลด์ 6:
-//   - เลือกสาขาได้ 2 แห่ง (คำเที่ยง / ดอยสะเก็ด)
 //   - เลือกวันได้ตั้งแต่วันนี้ ล่วงหน้าสูงสุด 3 วัน
 //   - เวลาเข้ารับเป็น slot รายชั่วโมง 09:00-10:00 … 16:00-17:00
 //   - ระบบอนุญาตให้เลือกเวลาได้ไวสุด 3 ชั่วโมงจากเวลาปัจจุบัน
 //
 // แยกออกมาเป็น util เพื่อเขียนเทสต์กฎเวลาได้โดยไม่ต้อง mount คอมโพเนนต์
-
-// สาขาที่เปิดให้เข้ารับ — ค่าคงที่ตามที่ลูกค้าระบุ
-// (ยังไม่ผูกกับตาราง branch ของ ERP เพราะ marketplace ยิงเอกสารเข้า branch_code '00000' อย่างเดียว)
-export const PICKUP_BRANCHES = [
-    { code: 'KHAMTHIANG', name: 'คำเที่ยง' },
-    { code: 'DOISAKET', name: 'ดอยสะเก็ด' }
-];
 
 // ชั่วโมงเริ่มต้นของแต่ละ slot — 09:00-10:00 ถึง 16:00-17:00
 export const PICKUP_SLOT_START_HOURS = [9, 10, 11, 12, 13, 14, 15, 16];
@@ -78,9 +70,8 @@ export function getAvailablePickupSlots(selectedDate, now = new Date()) {
  * ประกอบข้อความรับเองสำหรับใส่ในหมายเหตุ QT
  * ลูกค้าระบุว่า "ข้อมูลจะอยู่ที่ หมายเหตุ ขอ QT"
  */
-export function buildPickupRemark({ branchName = '', dateText = '', timeSlot = '', receiver = '', vehicle = '' } = {}) {
+export function buildPickupRemark({ dateText = '', timeSlot = '', receiver = '', vehicle = '' } = {}) {
     const parts = [];
-    if (branchName) parts.push(`สาขา${branchName}`);
     if (dateText) parts.push(dateText);
     if (timeSlot) parts.push(timeSlot);
     if (receiver) parts.push(`ผู้รับ: ${receiver}`);

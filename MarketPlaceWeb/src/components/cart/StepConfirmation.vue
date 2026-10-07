@@ -15,7 +15,7 @@ import { getCheckoutFormIssue } from '@/utils/checkoutReadiness';
 import { isSalePremiumItem } from '@/utils/itemType';
 import { pickProductName, withProductDisplay } from '@/utils/languageDisplay';
 import { getPreorderSplit, splitItemsForPreorder, toOrderQty } from '@/utils/preorderSplit';
-import { buildPickupRemark, getAvailablePickupSlots, getPickupDateRange, PICKUP_BRANCHES } from '@/utils/pickupSlots';
+import { getAvailablePickupSlots, getPickupDateRange } from '@/utils/pickupSlots';
 import MultiSelect from 'primevue/multiselect';
 import ProgressSpinner from 'primevue/progressspinner';
 import Tag from 'primevue/tag';
@@ -443,9 +443,7 @@ const formData = ref({
     remark: props.orderData.remark || ''
 });
 
-// ── รับเองที่สาขา (รีวิว 260908 สไลด์ 6) ──────────────────────────────
-const pickupBranches = PICKUP_BRANCHES;
-const pickupBranch = ref('');
+// ── รับเอง (รีวิว 260908 สไลด์ 6) ──────────────────────────────────────
 const pickupDate = ref(new Date());
 const pickupTimeSlot = ref('');
 const pickupReceiver = ref('');
@@ -453,7 +451,6 @@ const pickupVehicle = ref('');
 
 const pickupDateRange = computed(() => getPickupDateRange());
 const pickupSlots = computed(() => getAvailablePickupSlots(pickupDate.value));
-const pickupBranchName = computed(() => pickupBranches.find((b) => b.code === pickupBranch.value)?.name || '');
 
 // เปลี่ยนวันแล้ว slot ที่เลือกไว้อาจใช้ไม่ได้ (เช่นเลือกเช้าของวันนี้ไว้แล้วย้อนกลับมาวันนี้)
 // ต้องล้างทิ้ง ไม่งั้นจะส่ง slot ที่เกินเวลาไปให้ ERP
@@ -470,7 +467,6 @@ const checkoutFormIssue = computed(() =>
         deliveryMethod: formData.value.deliveryMethod,
         deliveryAddress: formData.value.deliveryAddress,
         deliveryTelephone: formData.value.deliveryTelephone,
-        pickupBranch: pickupBranch.value,
         pickupDate: pickupDate.value,
         pickupTimeSlot: pickupTimeSlot.value,
         pickupReceiver: pickupReceiver.value,
@@ -481,9 +477,9 @@ const checkoutFormBlockMessage = computed(() => (checkoutFormIssue.value ? t(`re
 const canSubmitOrder = computed(() => priceAndStockReady.value && !checkoutFormIssue.value && !(formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value));
 const checkoutBlockMessage = computed(() => priceBlockMessage.value || preorderBlockMessage.value || (formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value ? 'กำลังดึงข้อมูลที่อยู่ลูกค้า' : checkoutFormBlockMessage.value));
 
-// ข้อความ "กรุณาเลือกสาขา/วัน/เวลา/ผู้รับ/ทะเบียน" ต้องอยู่ติดกล่องที่ต้องแก้
+// ข้อความ "กรุณาเลือกวัน/เวลา/ผู้รับ/ทะเบียน" ต้องอยู่ติดกล่องที่ต้องแก้
 // ไม่ใช่ไปกองรวมล่างสุดของหน้า ซึ่งอยู่ไกลจากช่องที่ยังไม่ได้กรอก
-const PICKUP_ISSUE_KEYS = ['requirePickupBranch', 'requirePickupDate', 'requirePickupTimeSlot', 'requirePickupReceiver', 'requirePickupVehicle'];
+const PICKUP_ISSUE_KEYS = ['requirePickupDate', 'requirePickupTimeSlot', 'requirePickupReceiver', 'requirePickupVehicle'];
 const pickupBlockMessage = computed(() => (PICKUP_ISSUE_KEYS.includes(checkoutFormIssue.value) ? checkoutFormBlockMessage.value : ''));
 
 const deliveryMethodLabel = computed(() => (formData.value.deliveryMethod === 'delivery' ? t('reviewOrder.deliveryCustomer') : t('reviewOrder.pickupSelf')));
@@ -1260,9 +1256,8 @@ async function proceedCheckout() {
             telephone: formData.value.telephone,
             send_date: formatDate(sendDate.value),
             send_day: sendDay.value,
-            // ข้อมูลรับเองที่สาขา — backend เอาไปต่อท้ายหมายเหตุของ QT
+            // ข้อมูลรับเอง — backend เอาไปต่อท้ายหมายเหตุของ QT
             // (รีวิว 260908 สไลด์ 6: "ข้อมูลจะอยู่ที่ หมายเหตุ ขอ QT")
-            pickup_branch: formData.value.deliveryMethod === 'pickup' ? pickupBranchName.value : '',
             // ส่งเป็น dd/mm/yyyy ให้ตรงกับที่ผู้ใช้เห็นในช่องเลือกวัน — ข้อความนี้ไปโผล่
             // ในหมายเหตุของ QT ซึ่งพนักงาน ERP เป็นคนอ่าน ไม่ใช่เครื่องอ่าน
             pickup_date: formData.value.deliveryMethod === 'pickup' ? formatPickupDate(pickupDate.value) : '',
@@ -1920,19 +1915,6 @@ function isExpanded(itemCode) {
                         <div v-if="formData.deliveryMethod === 'pickup'" class="mb-4">
                             <label class="block font-medium mb-2">{{ t('reviewOrder.pickupDetails') }}</label>
                             <div class="confirmation-subcard p-4 rounded-lg space-y-3">
-                                <div>
-                                    <label :for="'pickup-branch-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupBranch') }} <span class="text-red-500">*</span></label>
-                                    <Select
-                                        :inputId="'pickup-branch-cus'"
-                                        v-model="pickupBranch"
-                                        :options="pickupBranches"
-                                        optionLabel="name"
-                                        optionValue="code"
-                                        :placeholder="t('reviewOrder.pickupBranchPlaceholder')"
-                                        class="w-full"
-                                    />
-                                </div>
-
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label :for="'pickup-date-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupDate') }} <span class="text-red-500">*</span></label>
@@ -2070,19 +2052,6 @@ function isExpanded(itemCode) {
                         <div v-if="formData.deliveryMethod === 'pickup'" class="mb-4">
                             <label class="block font-medium mb-2">{{ t('reviewOrder.pickupDetails') }}</label>
                             <div class="confirmation-subcard p-4 rounded-lg space-y-3">
-                                <div>
-                                    <label :for="'pickup-branch-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupBranch') }} <span class="text-red-500">*</span></label>
-                                    <Select
-                                        :inputId="'pickup-branch-emp'"
-                                        v-model="pickupBranch"
-                                        :options="pickupBranches"
-                                        optionLabel="name"
-                                        optionValue="code"
-                                        :placeholder="t('reviewOrder.pickupBranchPlaceholder')"
-                                        class="w-full"
-                                    />
-                                </div>
-
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label :for="'pickup-date-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupDate') }} <span class="text-red-500">*</span></label>

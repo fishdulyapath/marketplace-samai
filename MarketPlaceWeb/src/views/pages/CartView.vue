@@ -575,8 +575,7 @@ async function processCheckout(finalOrderData, done) {
             // เพิ่มฟิลด์ใหม่สำหรับวันที่จัดส่งและเครดิต
             send_date: finalOrderData.send_date || null,
             send_day: finalOrderData.send_day || null,
-            // ข้อมูลรับเองที่สาขา (รีวิว 260908 สไลด์ 6)
-            pickup_branch: finalOrderData.pickup_branch || '',
+            // ข้อมูลรับเอง (รีวิว 260908 สไลด์ 6)
             pickup_date: finalOrderData.pickup_date || '',
             pickup_time_slot: finalOrderData.pickup_time_slot || '',
             pickup_receiver: finalOrderData.pickup_receiver || '',

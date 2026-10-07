@@ -61,7 +61,8 @@ const warehouses = ref([]),
     validLines = ref({}),
     doneLines = ref({});
 const action = ref(''),
-    reason = ref('');
+    reason = ref(''),
+    quote = ref(null);
 const drafts = new Map();
 let listVersion = 0,
     detailVersion = 0;
@@ -165,6 +166,7 @@ function doneLine(item) {
     nextIncomplete(item.line_number);
 }
 function markLineChanged(item) {
+    quote.value = null;
     if (!doneLines.value[item.line_number]) return;
     doneLines.value[item.line_number] = false;
     folded.value[item.line_number] = false;
@@ -202,6 +204,7 @@ function applyBulk() {
         row.shelf_code = bulkShelf.value;
     });
     batchEditing = false;
+    quote.value = null;
     persistDraft(selected.value);
     bulkRevision.value++;
     bulkVisible.value = false;
@@ -231,6 +234,7 @@ async function open(row) {
     opening.value = true;
     error.value = '';
     stockIssues.value = [];
+    quote.value = null;
     try {
         const [fresh, master] = await Promise.all([PendingOrderService.detail(row.doc_no), InventoryService.getWarehouseList()]);
         if (version !== detailVersion) return;
@@ -277,6 +281,23 @@ async function open(row) {
         if (version === detailVersion) opening.value = false;
     }
 }
+async function reviewQuote() {
+    if (!canConfirm.value || !selected.value) return;
+    busy.value = true;
+    error.value = '';
+    notice.value = '';
+    try {
+        quote.value = await PendingOrderService.quote(selected.value.doc_no, allocationPayload(selected.value.items));
+        action.value = 'confirm';
+    } catch (err) {
+        quote.value = null;
+        const issues = err?.response?.data?.price_issues || [];
+        const products = [...new Set(issues.map((issue) => issue.item_code).filter(Boolean))];
+        error.value = `${messageOf(err)}${products.length ? `: ${products.join(', ')}` : ''}`;
+    } finally {
+        busy.value = false;
+    }
+}
 async function act() {
     if (busy.value || !selected.value || (action.value === 'confirm' && !canConfirm.value) || (action.value === 'reject' && !reason.value.trim())) return;
     busy.value = true;
@@ -286,7 +307,7 @@ async function act() {
     const doc = selected.value.doc_no;
     try {
         if (action.value === 'confirm') {
-            const result = await PendingOrderService.confirm(doc, allocationPayload(selected.value.items));
+            const result = await PendingOrderService.confirm(doc, allocationPayload(selected.value.items), quote.value?.fingerprint);
             notice.value = `ยืนยันแล้ว เลขที่คำสั่งซื้อ ${[...new Set([result.doc_no, ...(result.sub_doc_nos || [])].filter(Boolean))].join(', ')}`;
         } else {
             await PendingOrderService.reject(doc, reason.value.trim());
@@ -302,11 +323,18 @@ async function act() {
             await load();
         }
     } catch (err) {
-        action.value = '';
-        if (err?.response?.status === 409) {
+        const changedQuote = err?.response?.data?.quote;
+        if (err?.response?.data?.code === 'PENDING_QT_PRICE_CHANGED' && changedQuote) {
+            quote.value = changedQuote;
+            action.value = 'confirm';
+            notice.value = 'ราคา หรือเงื่อนไขสินค้าเปลี่ยนแล้ว กรุณาตรวจสอบยอด QT ล่าสุดก่อนยืนยันอีกครั้ง';
+        } else if (err?.response?.status === 409) {
+            action.value = '';
             removeDraft(doc);
             selected.value = null;
             await load();
+        } else {
+            action.value = '';
         }
         error.value = messageOf(err);
         stockIssues.value = err?.response?.data?.stock_issues || [];
@@ -508,7 +536,7 @@ onBeforeUnmount(() => {
                                     reason = '';
                                     action = 'reject';
                                 "
-                            /><Button label="ตรวจสอบและยืนยัน" icon="pi pi-arrow-right" iconPos="right" :disabled="!canConfirm" @click="action = 'confirm'" />
+                            /><Button label="ตรวจสอบและยืนยัน" icon="pi pi-arrow-right" iconPos="right" :disabled="!canConfirm" @click="reviewQuote" />
                         </div>
                     </footer>
                 </template>
@@ -535,7 +563,15 @@ onBeforeUnmount(() => {
         >
             <p>{{ selected?.doc_no }} · {{ selected?.cust_name }}</p>
             <template v-if="action === 'confirm'"
-                ><h3 v-if="reviewRisk.length">ตรวจเป็นพิเศษ {{ reviewRisk.length }} รายการ</h3>
+                ><h3>ยอด QT ล่าสุด</h3>
+                <p class="quote-total">฿{{ money(quote?.totals?.total_amount) }}</p>
+                <p v-if="Number(quote?.totals?.total_amount) !== Number(selected?.total_amount)" class="risk-label">ยอดคำขอ MPR ฿{{ money(selected?.total_amount) }} · ส่วนต่าง ฿{{ money(Number(quote?.totals?.total_amount || 0) - Number(selected?.total_amount || 0)) }}</p>
+                <div v-for="(row, index) in quote?.items || []" :key="`${row.source_line}/${index}`" class="review-line">
+                    <strong>{{ row.source_item }} → {{ row.item_code }} · {{ row.item_name }}</strong>
+                    <p>{{ row.qty }} {{ row.unit_code }} · {{ row.wh_code }} / {{ row.shelf_code }}</p>
+                    <p>ราคา ฿{{ money(row.price) }}<span v-if="row.discount"> · ลด {{ row.discount }}</span> · {{ Number(row.tax_type) === 1 ? 'ยกเว้น VAT' : 'คิด VAT' }} · รวม ฿{{ money(row.sum_amount) }}</p>
+                </div>
+                <h3 v-if="reviewRisk.length">ตรวจเป็นพิเศษ {{ reviewRisk.length }} รายการ</h3>
                 <div v-for="item in reviewRisk" :key="item.line_number" class="review-line review-risk">
                     <strong>{{ item.item_code }} · {{ item.item_name }}</strong>
                     <p class="risk-label">{{ riskReasons(item).join(' · ') }}</p>
@@ -548,7 +584,7 @@ onBeforeUnmount(() => {
                         <p v-for="(row, index) in item.allocations" :key="index">→ {{ row.item_code }} × {{ row.qty }} {{ item.unit_code }} · {{ row.wh_code }} / {{ row.shelf_code }}</p>
                     </div>
                 </details>
-                <p class="review-total">ยอดรวม ฿{{ money(selected?.total_amount) }}</p></template
+                <p class="review-total">ยอด QT ฿{{ money(quote?.totals?.total_amount) }}</p></template
             >
             <label v-else class="reject-reason">เหตุผลที่แจ้งลูกค้า<Textarea v-model="reason" rows="4" maxlength="1000" autofocus /><small>จำเป็นต้องระบุเหตุผลก่อนปฏิเสธ</small></label>
             <template #footer
@@ -556,7 +592,7 @@ onBeforeUnmount(() => {
                     :label="action === 'confirm' ? 'ยืนยันสั่งซื้อ' : 'ปฏิเสธคำขอ'"
                     :severity="action === 'reject' ? 'danger' : undefined"
                     :loading="busy"
-                    :disabled="busy || (action === 'confirm' ? !canConfirm : !reason.trim())"
+                    :disabled="busy || (action === 'confirm' ? !canConfirm || !quote?.fingerprint : !reason.trim())"
                     @click="act"
             /></template>
         </Dialog>

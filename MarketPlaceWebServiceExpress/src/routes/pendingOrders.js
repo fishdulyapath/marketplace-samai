@@ -4,7 +4,7 @@ const { pendingIdentity, pendingAdmin } = require('../auth/pendingOrderAuth');
 const { likeContains } = require('../utils/likePattern');
 const { isIsoDate } = require('../utils/adminOrderFilters');
 const { isValidDocNoParam } = require('../utils/orderDocNo');
-const { rootLines, lockRequest, readRequest, confirmRequest, closeRequest, fail } = require('../utils/pendingOrder');
+const { rootLines, lockRequest, readRequest, quoteRequest, publicQuote, confirmRequest, closeRequest, fail } = require('../utils/pendingOrder');
 const { loadOptions } = require('../utils/pendingAllocations');
 
 module.exports = function pendingOrders(summarizeOrderVat) {
@@ -13,7 +13,8 @@ module.exports = function pendingOrders(summarizeOrderVat) {
     try { return res.json({ success: true, ...await handler(req) }); }
     catch (error) {
       if (!error.statusCode) console.error('pending order action:', error.message);
-      return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'ดำเนินการไม่สำเร็จ กรุณาลองใหม่' });
+      return res.status(error.statusCode || 500).json({ success: false, code: error.code, price_issues: error.price_issues,
+        quote: error.quote, message: error.statusCode ? error.message : 'ดำเนินการไม่สำเร็จ กรุณาลองใหม่' });
     }
   };
   const owner = (req, pending) => {
@@ -51,11 +52,14 @@ module.exports = function pendingOrders(summarizeOrderVat) {
     const found = await query('SELECT status FROM marketplace_pending_order WHERE doc_no=$1', [docNo(req)]);
     if (!found.rows.length) throw fail('ไม่พบคำขอ', 404);
     if (found.rows[0].status !== 'pending') throw fail('คำขอถูกดำเนินการแล้ว กรุณารีเฟรชรายการ');
-    const { rows } = await readRequest({ query }, req.params.docNo);
+    const { header, rows } = await readRequest({ query }, req.params.docNo);
     const source = rootLines(rows).find(row => Number(row.line_number) === Number(req.params.lineNumber));
-    if (!source || String(source.item_type) === '3') throw fail('บรรทัดนี้ไม่รองรับการเปลี่ยนรหัสสินค้า', 400);
+    if (!source || String(source.item_type) === '3' || Number(source.is_permium) === 1) throw fail('บรรทัดนี้ไม่รองรับการเปลี่ยนรหัสสินค้า', 400);
     return { data: { source_line_number: source.line_number, source_item_code: source.item_code, qty: source.qty, unit_code: source.unit_code,
-      ...await loadOptions({ query }, source, { stock: true }) } };
+      ...await loadOptions({ query }, source, { stock: true, pricing: {
+        custCode: header.cust_code, vatType: Number(header.vat_type || 0), vatRate: Number(header.vat_rate || 0),
+        saleType: Number(header.inquiry_type || 0), qty: source.qty,
+      } }) } };
   }));
   router.get('/pending-orders', pendingIdentity, (req, res, next) => req.auth.isEmployee ? pendingAdmin(req, res, next) : next(), list(false));
   router.get('/pending-orders/:docNo', pendingIdentity, action(async req => {
@@ -72,8 +76,13 @@ module.exports = function pendingOrders(summarizeOrderVat) {
     const p = found.rows[0];
     return { data: { ...header, status: p.status, reason: p.reason, qt_doc_no: p.qt_doc_no, items: rootLines(rows) } };
   }));
+  router.post('/admin/pending-orders/:docNo/quote', pendingIdentity, pendingAdmin, action(async req => {
+    const pending = await query('SELECT * FROM marketplace_pending_order WHERE doc_no=$1', [docNo(req)]);
+    if (!pending.rows.length) throw fail('ไม่พบคำขอ', 404);
+    return { data: publicQuote(await quoteRequest({ query }, pending.rows[0], req.body.allocations)) };
+  }));
   router.post('/admin/pending-orders/:docNo/confirm', pendingIdentity, pendingAdmin, action(req =>
-    withTransaction(async client => confirmRequest(client, await lockRequest(client, docNo(req)), req.body.allocations, req.auth.userCode, summarizeOrderVat))));
+    withTransaction(async client => confirmRequest(client, await lockRequest(client, docNo(req)), req.body.allocations, req.auth.userCode, req.body.pricing_fingerprint))));
   router.post('/admin/pending-orders/:docNo/reject', pendingIdentity, pendingAdmin, action(async req => {
     const reason = String(req.body.reason || '').trim();
     if (!reason || reason.length > 1000) throw fail('กรุณาระบุเหตุผลปฏิเสธ (ไม่เกิน 1,000 ตัวอักษร)', 400);

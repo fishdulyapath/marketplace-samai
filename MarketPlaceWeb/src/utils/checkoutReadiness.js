@@ -8,8 +8,7 @@ export function getCheckoutFormIssue({
     deliveryMethod = '',
     deliveryAddress = '',
     deliveryTelephone = '',
-    // ข้อมูลรับเองที่สาขา (รีวิว 260908 สไลด์ 6) — บังคับครบทุกช่องก่อนสั่งซื้อ
-    pickupBranch = '',
+    // ข้อมูลรับเอง — บังคับครบทุกช่องก่อนสั่งซื้อ
     pickupDate = null,
     pickupTimeSlot = '',
     pickupReceiver = '',
@@ -28,7 +27,6 @@ export function getCheckoutFormIssue({
     }
 
     if (deliveryMethod === 'pickup') {
-        if (!hasValue(pickupBranch)) return 'requirePickupBranch';
         if (!pickupDate) return 'requirePickupDate';
         if (!hasValue(pickupTimeSlot)) return 'requirePickupTimeSlot';
         if (!hasValue(pickupReceiver)) return 'requirePickupReceiver';
