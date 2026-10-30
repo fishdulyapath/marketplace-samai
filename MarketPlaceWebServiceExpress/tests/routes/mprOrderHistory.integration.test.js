@@ -89,9 +89,11 @@ const get = (url, staff = false) => request(app).get(url).set('Authorization', `
       ('SO1',36,'2026-09-30','C1',60,60,0),('SO2',36,'2026-09-30','C1',40,40,0),
       ('INV1',44,'2026-09-30','C1',60,60,0),('INV2',44,'2026-09-30','C1',40,40,0);
       INSERT INTO ap_ar_trans_detail(doc_no,billing_no,trans_flag,doc_date) VALUES
-      ('SO1','BSW2609300001-1',36,'2026-09-30'),('SO2','BSW2609300001-2',36,'2026-09-30'),
+      ('SO1','BSW2609300001-1',36,'2026-09-30'),('SO1','BSW2609300001-2',36,'2026-09-30'),
+      ('SO2','BSW2609300001-1',36,'2026-09-30'),('SO2','BSW2609300001-2',36,'2026-09-30'),
       ('INV1','SO1',44,'2026-09-30'),('INV2','SO2',44,'2026-09-30');
-      INSERT INTO ic_trans_detail(doc_no,trans_flag,line_number,item_code,unit_code,qty) VALUES ('SO1',36,1,'A','EA',6),('SO2',36,1,'B','EA',4);`);
+      INSERT INTO ic_trans_detail(doc_no,trans_flag,line_number,item_code,unit_code,qty,ref_doc_no) VALUES
+      ('SO1',36,1,'A','EA',6,'BSW2609300001-1'),('SO2',36,1,'B','EA',4,'BSW2609300001-2');`);
     const response = await get('/getOrderHeader?view=mpr&doc_no=MPR1');
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({ status: 'payment', balance: 100, total_amount: 100 });
@@ -115,7 +117,9 @@ const get = (url, staff = false) => request(app).get(url).set('Authorization', `
       ('SO1','BSW2609300001-1',36,'2026-09-30'),('SO2','BSW2609300001-1',36,'2026-09-30'),
       ('INV1','SO1',44,'2026-09-30'),('INV2','SO1',44,'2026-09-30'),('INV3','SO2',44,'2026-09-30');
       INSERT INTO ap_ar_trans_detail(doc_no,billing_no,billing_date,trans_flag,sum_pay_money) VALUES
-      ('RC1','INV1','2026-09-30',239,10),('RC2','INV2','2026-09-30',239,5);`);
+      ('RC1','INV1','2026-09-30',239,10),('RC2','INV2','2026-09-30',239,5);
+      INSERT INTO ic_trans_detail(doc_no,trans_flag,line_number,item_code,unit_code,qty,ref_doc_no) VALUES
+      ('SO1',36,1,'A','EA',3,'BSW2609300001-1'),('SO2',36,1,'A','EA',3,'BSW2609300001-1');`);
     const result = await get('/getOrderHeader?view=mpr&doc_no=MPR1');
     expect(result.status).toBe(200);
     const [first, second] = result.body.data.document_flow;
@@ -145,7 +149,9 @@ const get = (url, staff = false) => request(app).get(url).set('Authorization', `
     await mockPool.query(`INSERT INTO ic_trans(doc_no,trans_flag,doc_date,cust_code,total_amount,inquiry_type) VALUES
       ('SO1',36,'2026-09-30','C1',60,0),('INV1',44,'2026-09-30','C1',60,0);
       INSERT INTO ap_ar_trans_detail(doc_no,billing_no,trans_flag,doc_date) VALUES ('SO1','BSW2609300001-1',36,'2026-09-30'),('INV1','SO1',44,'2026-09-30');
-      INSERT INTO cb_trans(doc_no,trans_flag,total_amount_pay) VALUES ('INV1',44,60)`);
+      INSERT INTO cb_trans(doc_no,trans_flag,total_amount_pay) VALUES ('INV1',44,60);
+      INSERT INTO ic_trans_detail(doc_no,trans_flag,line_number,item_code,unit_code,qty,ref_doc_no) VALUES
+      ('SO1',36,1,'A','EA',6,'BSW2609300001-1')`);
     const paid = await get('/getOrderHeader?view=mpr&doc_no=MPR1');
     expect(paid.body.data.balance).toBe(0);
     expect(paid.body.data.payment_documents).toEqual([]);

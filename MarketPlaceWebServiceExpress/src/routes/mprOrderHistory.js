@@ -31,7 +31,7 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
   const customer = (req, admin) => admin ? null : req.auth.isEmployee ? String(req.query.cust_code || '') : req.auth.userCode;
   async function operationalRows(numbers) {
     if (!numbers.length) return [];
-    const result = await query(orderHistoryCte('ic_qt.doc_no = ANY($1::text[])'), [numbers]);
+    const result = await query(orderHistoryCte('ic_qt.doc_no = ANY($1::text[])', true), [numbers]);
     const rows = [...new Map(result.rows.map(row => [orderRowKey(row), row])).values()];
     const invoiceNos = [...new Set(rows.map(row => row.inv_doc_no).filter(Boolean))];
     if (invoiceNos.length) {
@@ -189,7 +189,7 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
     const shipped = numbers.length ? await query(`SELECT ap.billing_no AS qt_doc_no,sd.* FROM
       (SELECT DISTINCT billing_no,doc_no FROM ap_ar_trans_detail WHERE trans_flag=36 AND billing_no=ANY($1::text[])) ap
       JOIN ic_trans t ON t.doc_no=ap.doc_no AND t.trans_flag=36 AND t.cust_code=$2
-      JOIN ic_trans_detail sd ON sd.doc_no=t.doc_no AND sd.trans_flag=36
+      JOIN ic_trans_detail sd ON sd.doc_no=t.doc_no AND sd.trans_flag=36 AND sd.ref_doc_no=ap.billing_no
       WHERE COALESCE(sd.set_ref_line,'')='' ORDER BY ap.billing_no,sd.doc_no,sd.line_number`, [numbers, pending.cust_code]) : { rows: [] };
     const progressRows = await operationalRows(numbers);
     const hasShipment = progressRows.some(row => row.so_doc_no) || shipped.rows.length > 0;

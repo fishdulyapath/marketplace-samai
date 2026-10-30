@@ -1312,7 +1312,7 @@ router.post('/cancelOrder', async (req, res) => {
 //
 // custPredicate ถูกต่อเข้า SQL ตรงๆ จึงรับได้เฉพาะข้อความคงที่ที่เขียนไว้ในไฟล์นี้เท่านั้น
 // ห้ามส่งค่าจาก req เข้ามาเด็ดขาด — ค่าจากผู้ใช้ต้องไปทาง $n เสมอ
-function orderHistoryCte(custPredicate = 'ic_qt.cust_code = $1') {
+function orderHistoryCte(custPredicate = 'ic_qt.cust_code = $1', strictSoReference = false) {
   return `
 SELECT DISTINCT *
 FROM (
@@ -1396,6 +1396,8 @@ FROM (
   FROM ic_trans ic_qt
   LEFT JOIN ic_trans ic_soc ON ic_soc.doc_ref = ic_qt.doc_no AND ic_soc.trans_flag = 31 
   LEFT JOIN ap_ar_trans_detail ap_so ON ap_so.billing_no = ic_qt.doc_no AND ap_so.trans_flag = 36
+    ${strictSoReference ? `AND EXISTS (SELECT 1 FROM ic_trans_detail so_line
+      WHERE so_line.doc_no=ap_so.doc_no AND so_line.trans_flag=36 AND so_line.ref_doc_no=ic_qt.doc_no)` : ''}
   -- ใบสั่งขายตัวจริงใน ic_trans — ap_ar_trans_detail มีแค่เลขอ้างอิง ไม่มีวันส่ง
   -- ต้องใช้อ่าน send_date ที่เซลส์กรอกตอน process SO (รีวิว 260908 สไลด์ 7)
   LEFT JOIN ic_trans ic_so ON ic_so.doc_no = ap_so.doc_no AND ic_so.trans_flag = 36

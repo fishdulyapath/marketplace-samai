@@ -12,7 +12,7 @@ const money = value => Number(value || 0).toLocaleString('th-TH', { minimumFract
         <h3>เอกสารที่ออกจากคำขอนี้</h3>
         <div v-for="qt in documents" :key="qt.qt_doc_no" class="document-flow__qt">
             <div class="document-flow__head"><strong>QT {{ qt.qt_doc_no }}</strong><span>{{ labels[qt.status] || qt.status }} · ฿{{ money(qt.total_amount) }}</span></div>
-            <p v-if="!qt.so_documents?.length" class="document-flow__muted">ยังไม่มีใบสั่งขาย</p>
+            <p v-if="!qt.so_documents?.length" class="document-flow__muted">ยังไม่มี SO ที่มีรายการสินค้าอ้าง QT ใบนี้</p>
             <div v-for="so in qt.so_documents || []" :key="so.so_doc_no" class="document-flow__so">
                 <div class="document-flow__head"><strong>SO {{ so.so_doc_no }}</strong><span>{{ labels[so.status] || so.status }}</span></div>
                 <p v-if="!so.invoices?.length" class="document-flow__muted">ยังไม่มีใบกำกับ</p>
