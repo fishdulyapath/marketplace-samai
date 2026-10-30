@@ -566,11 +566,21 @@ onBeforeUnmount(() => {
                 ><h3>ยอด QT ล่าสุด</h3>
                 <p class="quote-total">฿{{ money(quote?.totals?.total_amount) }}</p>
                 <p v-if="Number(quote?.totals?.total_amount) !== Number(selected?.total_amount)" class="risk-label">ยอดคำขอ MPR ฿{{ money(selected?.total_amount) }} · ส่วนต่าง ฿{{ money(Number(quote?.totals?.total_amount || 0) - Number(selected?.total_amount || 0)) }}</p>
-                <div v-for="(row, index) in quote?.items || []" :key="`${row.source_line}/${index}`" class="review-line">
-                    <strong>{{ row.source_item }} → {{ row.item_code }} · {{ row.item_name }}</strong>
-                    <p>{{ row.qty }} {{ row.unit_code }} · {{ row.wh_code }} / {{ row.shelf_code }}</p>
-                    <p>ราคา ฿{{ money(row.price) }}<span v-if="row.discount"> · ลด {{ row.discount }}</span> · {{ Number(row.tax_type) === 1 ? 'ยกเว้น VAT' : 'คิด VAT' }} · รวม ฿{{ money(row.sum_amount) }}</p>
-                </div>
+                <h3>จะแยกเป็น QT {{ quote?.documents?.length || 1 }} ใบ</h3>
+                <template v-if="quote?.documents?.length">
+                    <div v-for="document in quote.documents" :key="document.sequence" class="review-line document-review">
+                        <strong>QT ใบที่ {{ document.sequence }} · {{ document.wh_code }} / {{ document.shelf_code }}</strong>
+                        <p>{{ document.line_count }} บรรทัด · ยอด QT ฿{{ money(document.totals?.total_amount) }}</p>
+                        <p v-for="(row, index) in document.items" :key="`${row.source_line}/${index}`">{{ row.source_item }} → {{ row.item_code }} · {{ row.qty }} {{ row.unit_code }} · ราคา ฿{{ money(row.price) }}<span v-if="row.discount"> · ลด {{ row.discount }}</span> · {{ Number(row.tax_type) === 1 ? 'ยกเว้น VAT' : 'คิด VAT' }} · รวม ฿{{ money(row.sum_amount) }}</p>
+                    </div>
+                </template>
+                <template v-else>
+                    <div v-for="(row, index) in quote?.items || []" :key="`${row.source_line}/${index}`" class="review-line">
+                        <strong>{{ row.source_item }} → {{ row.item_code }} · {{ row.item_name }}</strong>
+                        <p>{{ row.qty }} {{ row.unit_code }} · {{ row.wh_code }} / {{ row.shelf_code }}</p>
+                        <p>ราคา ฿{{ money(row.price) }}<span v-if="row.discount"> · ลด {{ row.discount }}</span> · {{ Number(row.tax_type) === 1 ? 'ยกเว้น VAT' : 'คิด VAT' }} · รวม ฿{{ money(row.sum_amount) }}</p>
+                    </div>
+                </template>
                 <h3 v-if="reviewRisk.length">ตรวจเป็นพิเศษ {{ reviewRisk.length }} รายการ</h3>
                 <div v-for="item in reviewRisk" :key="item.line_number" class="review-line review-risk">
                     <strong>{{ item.item_code }} · {{ item.item_name }}</strong>

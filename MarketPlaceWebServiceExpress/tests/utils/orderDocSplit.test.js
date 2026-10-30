@@ -1,4 +1,4 @@
-const { splitItemsIntoDocuments, countLines } = require('../../src/utils/orderDocSplit');
+const { splitItemsIntoDocuments, splitItemsByLocation, countLines } = require('../../src/utils/orderDocSplit');
 
 // REQ4 — แบ่งเอกสารเมื่อเกิน 8 บรรทัด โดยกลุ่มที่ผูกกันห้ามหลุดคนละใบ
 
@@ -15,6 +15,7 @@ const premium = (groupId, paidCount, freeCount) => [
 ];
 
 const totalLines = (docs) => docs.reduce((sum, d) => sum + d.lineCount, 0);
+const located = (code, wh_code, shelf_code, extra = {}) => ({ ...normal(code), wh_code, shelf_code, ...extra });
 
 describe('countLines', () => {
   it('สินค้าปกติ = 1 บรรทัด', () => {
@@ -132,6 +133,44 @@ describe('kill switch', () => {
     const items = Array.from({ length: 20 }, (_, i) => normal(`A${i}`));
     expect(splitItemsIntoDocuments(items, -1)).toHaveLength(1);
     expect(splitItemsIntoDocuments(items, 'abc')).toHaveLength(1);
+  });
+});
+
+describe('แยก QT ตามคลังและที่เก็บ', () => {
+  it('รวมเฉพาะรายการที่อยู่คลังและที่เก็บเดียวกัน โดยเรียงตามจุดที่พบก่อน', () => {
+    const docs = splitItemsByLocation([
+      located('A', 'W1', 'S1'), located('B', 'W2', 'S1'),
+      located('C', 'W1', 'S1'), located('D', 'W1', 'S2'),
+    ], 0);
+    expect(docs.map(doc => [doc.wh_code, doc.shelf_code, doc.items.map(item => item.item_code)])).toEqual([
+      ['W1', 'S1', ['A', 'C']], ['W2', 'S1', ['B']], ['W1', 'S2', ['D']],
+    ]);
+  });
+
+  it('ข้อจำกัดบรรทัดแตกเฉพาะภายในจุดจัดเก็บเดียวกัน ไม่ปนคลังอื่น', () => {
+    const docs = splitItemsByLocation([
+      located('A', 'W1', 'S1'), located('B', 'W1', 'S1'), located('C', 'W1', 'S1'),
+      located('D', 'W2', 'S2'),
+    ], 2);
+    expect(docs.map(doc => [doc.wh_code, doc.shelf_code, doc.items.map(item => item.item_code)])).toEqual([
+      ['W1', 'S1', ['A', 'B']], ['W1', 'S1', ['C']], ['W2', 'S2', ['D']],
+    ]);
+  });
+
+  it('ชุดสินค้าอยู่ QT เดียวกับส่วนประกอบ แม้ต้องแยกตามตำแหน่ง', () => {
+    const productSet = { ...set('SET1', 2), wh_code: 'W1', shelf_code: 'S1' };
+    const docs = splitItemsByLocation([productSet, located('A', 'W2', 'S2')], 0);
+    expect(docs).toHaveLength(2);
+    expect(docs[0]).toMatchObject({ wh_code: 'W1', shelf_code: 'S1', lineCount: 3 });
+    expect(docs[0].items).toEqual([productSet]);
+  });
+
+  it('โปรโมชันที่เลือกคนละจุดจัดเก็บแยก QT ได้', () => {
+    const [paid, free] = premium('G1', 1, 1);
+    paid.wh_code = 'W1'; paid.shelf_code = 'S1';
+    free.wh_code = 'W2'; free.shelf_code = 'S2';
+    const docs = splitItemsByLocation([paid, free], 0);
+    expect(docs.map(doc => doc.items.map(item => item.item_code))).toEqual([['G1-P0'], ['G1-F0']]);
   });
 });
 

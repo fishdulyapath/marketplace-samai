@@ -90,20 +90,31 @@ const confirm = async (doc, allocations = [{ line_number: 1, wh_code: 'W2', shel
   it('splits a display line into physical codes and locations, preserves money and records source audit', async () => {
     await variants();
     const doc = (await send(payload('variants', [item('P1', 10)]))).body.doc_no;
-    const result = await confirm(doc, [
+    const allocations = [
       { line_number: 1, item_code: 'P1-A', qty: 6, wh_code: 'W1', shelf_code: 'S1' },
       { line_number: 1, item_code: 'P1-B', qty: 4, wh_code: 'W2', shelf_code: 'S2' },
+    ];
+    const preview = await request(app).post(`/admin/pending-orders/${doc}/quote`).set('Authorization', auth('EMP', 'employee')).send({ allocations });
+    expect(preview.status).toBe(200);
+    expect(preview.body.data.documents.map(row => [row.wh_code, row.shelf_code, row.totals.total_amount])).toEqual([
+      ['W1', 'S1', 600], ['W2', 'S2', 400],
     ]);
+    const result = await confirm(doc, allocations);
     expect(result.status).toBe(200);
-    const details = (await mockPool.query('SELECT * FROM ic_trans_detail WHERE trans_flag=30 ORDER BY line_number')).rows;
+    const quotes = (await mockPool.query('SELECT doc_no,doc_ref,total_amount,sale_code FROM ic_trans WHERE trans_flag=30 ORDER BY doc_no')).rows;
+    expect(quotes).toEqual([
+      { doc_no: 'MQT-variants-1', doc_ref: doc, total_amount: '600', sale_code: 'EMP' },
+      { doc_no: 'MQT-variants-2', doc_ref: doc, total_amount: '400', sale_code: 'EMP' },
+    ]);
+    const details = (await mockPool.query('SELECT * FROM ic_trans_detail WHERE trans_flag=30 ORDER BY doc_no,line_number')).rows;
     expect(details).toHaveLength(2);
-    expect(details[0]).toMatchObject({ item_code: 'P1-A', item_name: 'สินค้าจริง A', qty: '6', price: '100', sum_amount: '600', wh_code: 'W1', shelf_code: 'S1', sale_code: 'EMP' });
-    expect(details[1]).toMatchObject({ item_code: 'P1-B', qty: '4', sum_amount: '400', wh_code: 'W2', shelf_code: 'S2' });
+    expect(details[0]).toMatchObject({ doc_no: 'MQT-variants-1', item_code: 'P1-A', item_name: 'สินค้าจริง A', qty: '6', price: '100', sum_amount: '600', wh_code: 'W1', shelf_code: 'S1', sale_code: 'EMP' });
+    expect(details[1]).toMatchObject({ doc_no: 'MQT-variants-2', item_code: 'P1-B', qty: '4', sum_amount: '400', wh_code: 'W2', shelf_code: 'S2' });
     const originals = (await mockPool.query('SELECT item_code,qty FROM ic_trans_detail WHERE trans_flag=300')).rows;
     expect(originals).toEqual([{ item_code: 'P1', qty: '10' }]);
     const audit = (await mockPool.query('SELECT metadata FROM marketplace_pending_order')).rows[0].metadata.confirmed_allocations;
     expect(audit).toHaveLength(2);
-    expect(audit[1]).toMatchObject({ source_line_number: 1, source_item_code: 'P1', item_code: 'P1-B', qty: 4, qt_line_number: 2 });
+    expect(audit[1]).toMatchObject({ source_line_number: 1, source_item_code: 'P1', qt_doc_no: 'MQT-variants-2', item_code: 'P1-B', qty: 4, qt_line_number: 1 });
     for (const field of ['sum_amount','sum_amount_exclude_vat','total_vat_value','discount_amount']) {
       const sums = (await mockPool.query(`SELECT trans_flag,SUM(${field}) AS amount FROM ic_trans_detail GROUP BY trans_flag ORDER BY trans_flag`)).rows;
       expect(Number(sums[0].amount)).toBe(Number(sums[1].amount));

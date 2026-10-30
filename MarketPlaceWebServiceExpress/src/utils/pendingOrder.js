@@ -1,9 +1,10 @@
 const { normalizeAllocations, allocateLines } = require('./pendingAllocations');
-const { quotePendingQt, summarize } = require('./pendingQuote');
-const { splitItemsIntoDocuments } = require('./orderDocSplit');
+const { quotePendingQt, summarize, publicItem } = require('./pendingQuote');
+const { splitItemsByLocation } = require('./orderDocSplit');
 const { resolveMainDocNo, formatSubDocNo } = require('./orderDocNo');
 const { getOrderDocPattern, getErpMaxLinesPerDoc } = require('./marketplaceSalesSettings');
 const { serverDocDate, serverDocTime } = require('./serverTime');
+const crypto = require('crypto');
 
 function fail(message, statusCode = 409) {
   return Object.assign(new Error(message), { statusCode });
@@ -57,8 +58,14 @@ async function insertColumns(client, table, columns, values) {
   await client.query(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(',')})`, columns.map(key => values[key] ?? null));
 }
 
-function quoteTotals(chunks, header) {
-  return chunks.map(chunk => {
+const TOTAL_FIELDS = [
+  ['totalValue', 'total_value'], ['totalDiscount', 'total_discount'], ['totalBeforeVat', 'total_before_vat'],
+  ['totalVatValue', 'total_vat_value'], ['totalAfterVat', 'total_after_vat'], ['totalExceptVat', 'total_except_vat'],
+  ['totalAmount', 'total_amount'],
+];
+
+function quoteTotals(chunks, header, totalTarget = null) {
+  const totals = chunks.map(chunk => {
     const totals = summarize(chunk.items, header);
     return {
       totalValue: totals.total_value,
@@ -70,6 +77,42 @@ function quoteTotals(chunks, header) {
       totalAmount: totals.total_amount,
     };
   });
+  if (!totalTarget || !totals.length) return totals;
+  const last = totals[totals.length - 1];
+  for (const [key, targetKey] of TOTAL_FIELDS) {
+    const total = totals.reduce((sum, row) => sum + Number(row[key] || 0), 0);
+    const delta = Math.round((Number(totalTarget[targetKey] || 0) - total) * 100) / 100;
+    if (delta) last[key] = Math.round((Number(last[key] || 0) + delta) * 100) / 100;
+  }
+  return totals;
+}
+
+function publicTotals(totals) {
+  return Object.fromEntries(TOTAL_FIELDS.map(([key, targetKey]) => [targetKey, totals[key]]));
+}
+
+function documentFingerprint(baseFingerprint, chunks, totals) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    quote: baseFingerprint,
+    documents: chunks.map((chunk, index) => ({
+      wh_code: chunk.wh_code,
+      shelf_code: chunk.shelf_code,
+      line_count: chunk.lineCount,
+      items: chunk.items.map(row => [row.__source_line, row.item_code, row.qty]),
+      totals: publicTotals(totals[index]),
+    })),
+  })).digest('hex');
+}
+
+function publicDocuments(chunks, totals) {
+  return chunks.map((chunk, index) => ({
+    sequence: index + 1,
+    wh_code: chunk.wh_code,
+    shelf_code: chunk.shelf_code,
+    line_count: chunk.lineCount,
+    totals: publicTotals(totals[index]),
+    items: chunk.items.map(publicItem),
+  }));
 }
 
 async function quoteRequest(client, pending, allocations) {
@@ -79,11 +122,19 @@ async function quoteRequest(client, pending, allocations) {
   const roots = rootLines(rows, pending.metadata);
   const selected = validateAllocations(roots, allocations);
   const allocated = await allocateLines(client, roots, selected);
-  return quotePendingQt(pending, header, allocated);
+  const quote = await quotePendingQt(pending, header, allocated);
+  const maxLines = await getErpMaxLinesPerDoc(client);
+  const chunks = splitItemsByLocation(quote._rows, maxLines);
+  const documentTotals = quoteTotals(chunks, header, quote.totals);
+  quote.documents = publicDocuments(chunks, documentTotals);
+  quote.fingerprint = documentFingerprint(quote.fingerprint, chunks, documentTotals);
+  quote._document_chunks = chunks;
+  quote._document_totals = documentTotals;
+  return quote;
 }
 
 function publicQuote(quote) {
-  const { _rows, ...result } = quote;
+  const { _rows, _document_chunks, _document_totals, ...result } = quote;
   return result;
 }
 
@@ -102,7 +153,7 @@ async function confirmRequest(client, pending, allocations, employeeCode, pricin
   const date = serverDocDate();
   const time = serverDocTime();
   const serverNumber = pending.doc_source === 'server';
-  const chunks = splitItemsIntoDocuments(allocated, serverNumber ? await getErpMaxLinesPerDoc(client) : 0);
+  const chunks = quote._document_chunks;
   const main = serverNumber
     ? await resolveMainDocNo(client, { pattern: await getOrderDocPattern(client), docDate: date, transFlag: 30, includePendingReservations: true })
     : pending.reserved_qt_no;
@@ -114,7 +165,7 @@ async function confirmRequest(client, pending, allocations, employeeCode, pricin
   const existing = await client.query('SELECT doc_no FROM ic_trans WHERE doc_no=ANY($1) LIMIT 1', [numbers]);
   if (existing.rows.length) throw fail('เลข QT ถูกใช้แล้ว กรุณาติดต่อผู้ดูแลระบบ');
   const audit = [];
-  const documentTotals = quoteTotals(chunks, header);
+  const documentTotals = quote._document_totals;
   for (let i = 0; i < chunks.length; i++) {
     const totals = documentTotals[i];
     await insertColumns(client, 'ic_trans', HEADER_COLUMNS, {

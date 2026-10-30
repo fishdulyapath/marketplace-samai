@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import AdminOrderService from '@/services/AdminOrderService';
 import { getOrderTotalBeforeVat } from '@/utils/orderTaxTotals';
+import OrderDocumentFlow from '@/components/orders/OrderDocumentFlow.vue';
 
 const router = useRouter();
 const toast = useToast();
@@ -490,6 +491,8 @@ onBeforeUnmount(() => {
                         <div class="aod__row"><span>พนักงาน:</span><b>{{ detailOrder.emp_name || detailOrder.emp_code || '-' }}</b></div>
                     </div>
                 </div>
+
+                <OrderDocumentFlow :documents="detailOrder.document_flow || []" />
 
                 <!-- รายการสินค้า -->
                 <div class="aod__items-title"><i class="pi pi-shopping-cart"></i> รายการสินค้า ({{ detailItems.length }} / {{ detailTotalItems }} รายการ)</div>

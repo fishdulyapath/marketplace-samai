@@ -153,4 +153,4 @@ async function quotePendingQt(pending, header, allocated) {
   };
 }
 
-module.exports = { quotePendingQt, calcAfterDiscount, distributeMoney, summarize, lineVat };
+module.exports = { quotePendingQt, calcAfterDiscount, distributeMoney, summarize, lineVat, publicItem };

@@ -96,8 +96,31 @@ function splitItemsIntoDocuments(items, maxLines = DEFAULT_MAX_LINES) {
   return documents;
 }
 
+// สร้าง QT แยกตามคู่คลัง/ที่เก็บก่อน แล้วจึงใช้กติกาจำนวนบรรทัด ERP
+// ภายในแต่ละจุดจัดเก็บยังคงเก็บสินค้าชุดและโปรโมชันกลุ่มเดียวกันเหมือนเดิม
+// แต่โปรโมชันที่พนักงานจัดไปคนละจุดจะได้ QT คนละใบตามตำแหน่งที่เลือก
+function splitItemsByLocation(items, maxLines = DEFAULT_MAX_LINES) {
+  const locations = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const whCode = String(item?.wh_code || '').trim();
+    const shelfCode = String(item?.shelf_code || '').trim();
+    const key = `${whCode}\u0000${shelfCode}`;
+    if (!locations.has(key)) locations.set(key, { wh_code: whCode, shelf_code: shelfCode, items: [] });
+    locations.get(key).items.push(item);
+  }
+
+  return [...locations.values()].flatMap(location =>
+    splitItemsIntoDocuments(location.items, maxLines).map(document => ({
+      ...document,
+      wh_code: location.wh_code,
+      shelf_code: location.shelf_code,
+    }))
+  );
+}
+
 module.exports = {
   DEFAULT_MAX_LINES,
   countLines,
   splitItemsIntoDocuments,
+  splitItemsByLocation,
 };

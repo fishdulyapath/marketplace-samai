@@ -84,7 +84,21 @@ PendingOrderService.quote = async (_, allocations) => {
         tax_type: 0,
         sum_amount: 45 * Number(row.qty || products[row.line_number - 1].qty)
     }));
-    return { fingerprint: 'preview-price-token', items, totals: { total_amount: items.reduce((sum, item) => sum + item.sum_amount, 0) } };
+    const grouped = new Map();
+    for (const item of items) {
+        const key = `${item.wh_code}\u0000${item.shelf_code}`;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(item);
+    }
+    const documents = [...grouped.values()].map((group, index) => ({
+        sequence: index + 1,
+        wh_code: group[0].wh_code,
+        shelf_code: group[0].shelf_code,
+        line_count: group.length,
+        items: group,
+        totals: { total_amount: group.reduce((sum, item) => sum + item.sum_amount, 0) }
+    }));
+    return { fingerprint: 'preview-price-token', items, documents, totals: { total_amount: items.reduce((sum, item) => sum + item.sum_amount, 0) } };
 };
 PendingOrderService.confirm = async (doc) => {
     queue = queue.filter((row) => row.doc_no !== doc);

@@ -1,4 +1,4 @@
-const { projectHeader, projectItems, qtNumbers } = require('../../src/utils/mprOrderHistory');
+const { projectHeader, projectItems, qtNumbers, projectDocumentFlow } = require('../../src/utils/mprOrderHistory');
 const { aggregateOrderRowsByMainDoc } = require('../../src/utils/orderHistoryAggregate');
 
 const line = (doc, n, code, qty, unit = 'EA', extra = {}) => ({ doc_no: doc, line_number: n, item_code: code,
@@ -9,6 +9,33 @@ const links = [[1, 'QT1', 1, 'A'], [1, 'QT2', 1, 'B'], [2, 'QT2', 2, 'A']].map((
   source_line_number: src, source_item_code: 'DISPLAY', qt_doc_no: qt, qt_line_number: target, item_code: item,
 }));
 const pending = { doc_no: 'MPR1', cust_code: 'C1', status: 'confirmed', qt_doc_no: 'QT', qt_doc_nos: ['QT1', 'QT2'], metadata: { confirmed_allocations: links } };
+
+test('document flow keeps every QT, SO, invoice and receipt under its parent', () => {
+  const flow = projectDocumentFlow([
+    { doc_no: 'QT1', so_doc_no: 'SO1', inv_doc_no: 'INV1', status: 'success', total_amount: 60,
+      invoice_total_amount: 60, paid_amount: 60, payment_balance: 0, receipt_documents: [{ doc_no: 'RC1', amount: 60 }] },
+    { doc_no: 'QT1', so_doc_no: 'SO2', status: 'packing', total_amount: 60 },
+    { doc_no: 'QT2', status: 'pending', total_amount: 40 },
+  ], ['QT1', 'QT2']);
+  expect(flow.map(qt => qt.status)).toEqual(['packing', 'pending']);
+  expect(flow[0].so_documents.map(so => so.so_doc_no)).toEqual(['SO1', 'SO2']);
+  expect(flow[0].so_documents[0].invoices[0]).toMatchObject({ inv_doc_no: 'INV1', paid_amount: 60, balance: 0, receipts: [{ doc_no: 'RC1', amount: 60 }] });
+});
+test('one QT can branch into several SOs and each SO can branch into several invoices', () => {
+  const flow = projectDocumentFlow([
+    { doc_no: 'QT1', so_doc_no: 'SO1', inv_doc_no: 'INV1', status: 'success', invoice_total_amount: 10, paid_amount: 10, receipt_documents: [{ doc_no: 'RC1', amount: 10 }] },
+    { doc_no: 'QT1', so_doc_no: 'SO1', inv_doc_no: 'INV2', status: 'payment', invoice_total_amount: 20, paid_amount: 5, payment_balance: 15, receipt_documents: [{ doc_no: 'RC2', amount: 5 }] },
+    { doc_no: 'QT1', so_doc_no: 'SO2', inv_doc_no: 'INV3', status: 'payment', invoice_total_amount: 30, payment_balance: 30 },
+    { doc_no: 'QT2', status: 'pending' },
+  ], ['QT1', 'QT2']);
+  expect(flow.map(qt => qt.qt_doc_no)).toEqual(['QT1', 'QT2']);
+  expect(flow[0].so_documents.map(so => [so.so_doc_no, so.invoices.map(inv => inv.inv_doc_no)])).toEqual([
+    ['SO1', ['INV1', 'INV2']], ['SO2', ['INV3']],
+  ]);
+  expect(flow[0].status).toBe('payment');
+  expect(flow[0].so_documents[0].status).toBe('payment');
+  expect(flow[0].so_documents[0].invoices[1].receipts).toEqual([{ doc_no: 'RC2', amount: 5 }]);
+});
 
 test('one source line splits across QTs; identical display code in another unit stays separate', () => {
   const result = projectItems(source, actual, pending, { staff: true });

@@ -11,6 +11,35 @@ function qtNumbers(pending) {
   return [...new Set((Array.isArray(numbers) && numbers.length ? numbers : [pending.qt_doc_no]).filter(Boolean))];
 }
 
+function projectDocumentFlow(rows, numbers = []) {
+  const byQt = new Map();
+  for (const no of numbers) byQt.set(no, { qt_doc_no: no, status: '', total_amount: 0, so_documents: [] });
+  for (const row of rows) {
+    const no = String(row.doc_no || '');
+    if (!no) continue;
+    if (!byQt.has(no)) byQt.set(no, { qt_doc_no: no, status: '', total_amount: 0, so_documents: [] });
+    const qt = byQt.get(no);
+    qt.total_amount = Number(row.total_amount) || 0;
+    qt.status = resolveGroupStatus([qt.status, row.status || 'pending']);
+    const soNo = String(row.so_doc_no || '');
+    if (!soNo) continue;
+    let so = qt.so_documents.find(doc => doc.so_doc_no === soNo);
+    if (!so) {
+      so = { so_doc_no: soNo, status: row.status || 'packing', invoices: [] };
+      qt.so_documents.push(so);
+    } else so.status = resolveGroupStatus([so.status, row.status || 'packing']);
+    const invNo = String(row.inv_doc_no || '');
+    if (!invNo || so.invoices.some(doc => doc.inv_doc_no === invNo)) continue;
+    so.invoices.push({
+      inv_doc_no: invNo, doc_date: row.inv_doc_date || '', status: row.status || 'payment',
+      total_amount: Number(row.invoice_total_amount ?? row.invoiced_amount) || 0,
+      paid_amount: Number(row.paid_amount) || 0, balance: Number(row.payment_balance) || 0,
+      receipts: row.receipt_documents || [],
+    });
+  }
+  return [...byQt.values()].map(qt => ({ ...qt, status: qt.status || 'pending' }));
+}
+
 function projectHeader(pending, header, operational = {}) {
   const status = { pending: 'awaiting_confirmation', cancelled: 'cancelled', rejected: 'rejected' }[pending.status]
     || operational.status || 'pending';
@@ -102,4 +131,4 @@ function projectItems(sourceRows, qtRows, pending, { staff = false, shipped = []
   return { items, ...(staff ? { unmapped_items: qtRoots.filter(row => !used.has(lineKey(row))).map(row => ({ ...projectLine(row), sub_item: row.sub_item.map(projectLine) })) } : {}) };
 }
 
-module.exports = { qtNumbers, projectHeader, projectItems };
+module.exports = { qtNumbers, projectHeader, projectItems, projectDocumentFlow };

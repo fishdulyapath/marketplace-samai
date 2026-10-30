@@ -10,6 +10,7 @@ import { pickProductName, withProductDisplay } from '@/utils/languageDisplay';
 import { PREORDER_REMARK } from '@/utils/preorderSplit';
 import { getOrderTotalBeforeVat } from '@/utils/orderTaxTotals';
 import { orderLineKey, paymentDetails, payableAmount } from '@/utils/mprOrderHistory';
+import OrderDocumentFlow from '@/components/orders/OrderDocumentFlow.vue';
 
 import axios from 'axios';
 import { useToast } from 'primevue/usetoast';
@@ -1898,8 +1899,9 @@ onMounted(fetchOrderHistory);
                         </div>
                     </div>
 
-                    <!-- เอกสารฝ่ายขายที่ออกจากคำสั่งซื้อนี้ -->
-                    <div v-if="salesDocRows.length" class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg mb-4 detail-section">
+                    <OrderDocumentFlow :documents="selectedOrder.document_flow || []" />
+                    <!-- เอกสาร QT เก่าที่ไม่มี MPR -->
+                    <div v-if="!selectedOrder.document_flow?.length && salesDocRows.length" class="p-4 border border-gray-200 dark:border-gray-700 rounded-lg mb-4 detail-section">
                         <h3 class="text-lg font-semibold mb-2 flex items-center">
                             <i class="pi pi-file mr-2 text-primary-500"></i>
                             {{ t('historyPages.common.salesDocs') }}

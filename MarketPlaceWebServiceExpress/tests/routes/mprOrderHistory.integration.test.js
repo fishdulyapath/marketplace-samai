@@ -96,12 +96,35 @@ const get = (url, staff = false) => request(app).get(url).set('Authorization', `
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({ status: 'payment', balance: 100, total_amount: 100 });
     expect(response.body.data.payment_documents.map(row => row.doc_no).sort()).toEqual(['INV1', 'INV2']);
+    expect(response.body.data.document_flow.map(qt => [qt.qt_doc_no, qt.so_documents[0].so_doc_no, qt.so_documents[0].invoices[0].inv_doc_no])).toEqual([
+      ['BSW2609300001-1', 'SO1', 'INV1'], ['BSW2609300001-2', 'SO2', 'INV2'],
+    ]);
     const detail = await get('/getOrderDetail?view=mpr&doc_no=MPR1');
     expect(detail.body.data.items[0]).toMatchObject({ ship_state: 'full', shipped_qty: 10 });
     await mockPool.query(`INSERT INTO ap_ar_trans_detail(doc_no,billing_no,billing_date,trans_flag,sum_pay_money) VALUES
       ('RC1','INV1','2026-09-30',239,60),('RC1','INV2','2026-09-30',239,40)`);
     const paid = await get('/getOrderHeader?view=mpr&doc_no=MPR1');
     expect(paid.body.data).toMatchObject({ status: 'success', balance: 0, payment_documents: [] });
+    expect(paid.body.data.document_flow.map(qt => qt.so_documents[0].invoices[0].receipts[0].doc_no)).toEqual(['RC1', 'RC1']);
+  });
+  test('one QT may reference multiple SOs and one SO may reference multiple invoices', async () => {
+    await mockPool.query(`INSERT INTO ic_trans(doc_no,trans_flag,doc_date,cust_code,total_amount,inquiry_type) VALUES
+      ('SO1',36,'2026-09-30','C1',30,0),('SO2',36,'2026-09-30','C1',30,0),
+      ('INV1',44,'2026-09-30','C1',10,0),('INV2',44,'2026-09-30','C1',20,0),('INV3',44,'2026-09-30','C1',30,0);
+      INSERT INTO ap_ar_trans_detail(doc_no,billing_no,trans_flag,doc_date) VALUES
+      ('SO1','BSW2609300001-1',36,'2026-09-30'),('SO2','BSW2609300001-1',36,'2026-09-30'),
+      ('INV1','SO1',44,'2026-09-30'),('INV2','SO1',44,'2026-09-30'),('INV3','SO2',44,'2026-09-30');
+      INSERT INTO ap_ar_trans_detail(doc_no,billing_no,billing_date,trans_flag,sum_pay_money) VALUES
+      ('RC1','INV1','2026-09-30',239,10),('RC2','INV2','2026-09-30',239,5);`);
+    const result = await get('/getOrderHeader?view=mpr&doc_no=MPR1');
+    expect(result.status).toBe(200);
+    const [first, second] = result.body.data.document_flow;
+    expect(first.qt_doc_no).toBe('BSW2609300001-1');
+    expect(first.so_documents.map(so => [so.so_doc_no, so.invoices.map(inv => inv.inv_doc_no)])).toEqual([
+      ['SO1', ['INV1', 'INV2']], ['SO2', ['INV3']],
+    ]);
+    expect(first.so_documents[0].invoices[1]).toMatchObject({ paid_amount: 5, balance: 15, receipts: [{ doc_no: 'RC2', amount: 5 }] });
+    expect(second).toMatchObject({ qt_doc_no: 'BSW2609300001-2', status: 'pending', so_documents: [] });
   });
   test('cancelled request and rejected reason survive unified history', async () => {
     for (const status of ['cancelled', 'rejected']) {

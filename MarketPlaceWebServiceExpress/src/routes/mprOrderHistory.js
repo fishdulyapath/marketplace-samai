@@ -7,7 +7,7 @@ const { resolveDateRange, isIsoDate } = require('../utils/adminOrderFilters');
 const { serverDocDate } = require('../utils/serverTime');
 const { aggregateOrderRowsByMainDoc } = require('../utils/orderHistoryAggregate');
 const { readRequest, fail } = require('../utils/pendingOrder');
-const { qtNumbers, projectHeader, projectItems } = require('../utils/mprOrderHistory');
+const { qtNumbers, projectHeader, projectItems, projectDocumentFlow } = require('../utils/mprOrderHistory');
 const { likeContains } = require('../utils/likePattern');
 
 module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderRowKey, legacyOrderDetail }) {
@@ -35,19 +35,33 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
     const rows = [...new Map(result.rows.map(row => [orderRowKey(row), row])).values()];
     const invoiceNos = [...new Set(rows.map(row => row.inv_doc_no).filter(Boolean))];
     if (invoiceNos.length) {
-      const invoices = await query(`SELECT t.doc_no,t.doc_date::text AS doc_date,
+      const invoices = await query(`SELECT t.doc_no,t.doc_date::text AS doc_date,t.total_amount,
         GREATEST(0,COALESCE(t.total_amount,0)-COALESCE((SELECT SUM(COALESCE(p.sum_pay_money,0))
           FROM ap_ar_trans_detail p WHERE p.billing_no=t.doc_no AND p.billing_date=t.doc_date
           AND p.trans_flag=239 AND COALESCE(p.last_status,0)=0),0)
           -COALESCE((SELECT MAX(cb.total_amount_pay) FROM cb_trans cb WHERE cb.doc_no=t.doc_no),0)) AS balance
         FROM ic_trans t WHERE t.trans_flag=44 AND COALESCE(t.last_status,0)=0 AND t.doc_no=ANY($1::text[])`, [invoiceNos]);
+      const receipts = await query(`SELECT p.billing_no AS inv_doc_no,p.billing_date::text AS billing_date,p.doc_no AS receipt_doc_no,
+        COALESCE(p.sum_pay_money,0) AS amount FROM ap_ar_trans_detail p
+        WHERE p.trans_flag=239 AND COALESCE(p.last_status,0)=0 AND p.billing_no=ANY($1::text[])`, [invoiceNos]);
+      const receiptsByInvoice = new Map();
+      for (const receipt of receipts.rows) {
+        const entries = receiptsByInvoice.get(receipt.inv_doc_no) || [];
+        entries.push({ doc_no: receipt.receipt_doc_no, amount: Number(receipt.amount), billing_date: receipt.billing_date });
+        receiptsByInvoice.set(receipt.inv_doc_no, entries);
+      }
       const byInvoice = new Map(invoices.rows.map(row => [row.doc_no, row]));
       const counted = new Set();
       for (const row of rows) {
         const invoice = byInvoice.get(row.inv_doc_no);
         if (!invoice) continue;
         row.inv_doc_date = invoice.doc_date;
+        row.invoice_total_amount = Number(invoice.total_amount);
         row.payment_balance = Number(invoice.balance);
+        row.paid_amount = Math.max(0, row.invoice_total_amount - row.payment_balance);
+        row.receipt_documents = (receiptsByInvoice.get(invoice.doc_no) || [])
+          .filter(receipt => receipt.billing_date === invoice.doc_date)
+          .map(({ doc_no, amount }) => ({ doc_no, amount }));
         if (row.status === 'success' && row.payment_balance > 0) row.status = 'payment';
         row.balance = counted.has(invoice.doc_no) ? 0 : Number(invoice.balance);
         if (counted.has(invoice.doc_no)) row.invoiced_amount = 0;
@@ -62,7 +76,8 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
     for (const row of related) if (row.inv_doc_no && row.payment_balance > 0 && row.status !== 'cancel') {
       invoices.set(row.inv_doc_no, { doc_no: row.inv_doc_no, doc_date: row.inv_doc_date, total_amount: row.payment_balance });
     }
-    return { ...mapOrderRow(group), payment_documents: [...invoices.values()] };
+    return { ...mapOrderRow(group), payment_documents: [...invoices.values()],
+      document_flow: projectDocumentFlow(rows, [...new Set(related.map(row => row.doc_no))]) };
   });
   const requestSelect = `SELECT p.*, t.doc_date::text AS doc_date, t.doc_time, t.send_type,
     t.send_date::text AS send_date, COALESCE(t.send_day,0) AS send_day,
@@ -100,7 +115,9 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
     for (const row of operational) { const group = byQt.get(row.doc_no) || []; group.push(row); byQt.set(row.doc_no, group); }
     let data = requests.rows.map(p => {
       const rows = qtNumbers(p).flatMap(no => byQt.get(no) || []).map(row => ({ ...row, main_doc_no: p.doc_no }));
-      return projectHeader(p, p, aggregate(rows)[0]);
+      const projected = aggregate(rows)[0] || {};
+      projected.document_flow = projectDocumentFlow(rows, qtNumbers(p));
+      return projectHeader(p, p, projected);
     });
     const legacyNos = new Set(legacy.rows.map(row => row.doc_no));
     const legacyCustomers = new Map(legacy.rows.map(row => [row.main_doc_no, row]));
@@ -150,7 +167,9 @@ module.exports = function mprOrderHistory({ orderHistoryCte, mapOrderRow, orderR
     if (!pending) return next(); // Authenticated legacy QT compatibility.
     const { header } = await readRequest({ query }, pending.doc_no);
     const rows = (await operationalRows(qtNumbers(pending))).map(row => ({ ...row, main_doc_no: pending.doc_no }));
-    res.json({ success: true, data: projectHeader(pending, header, aggregate(rows)[0]) });
+    const projected = aggregate(rows)[0] || {};
+    projected.document_flow = projectDocumentFlow(rows, qtNumbers(pending));
+    res.json({ success: true, data: projectHeader(pending, header, projected) });
   }));
   const detail = admin => handle(async (req, res, next) => {
     const pending = await findRequest(req, admin);
