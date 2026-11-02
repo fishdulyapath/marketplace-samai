@@ -839,6 +839,26 @@ async function resolveBasketPricingContext(custCode) {
   return { saleType: null, vatType: null, vatRate: null };
 }
 
+// ตัวเลือกสินค้าสำหรับจัดหน้าเว็บ: อ่านเฉพาะรหัส/ชื่อ ไม่คำนวณสต๊อกหรือราคา
+router.get('/admin/content/products', requireAdmin('admin.content'), async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim().slice(0, 100);
+    const offset = Math.max(0, Math.min(1000000, toInt(req.query.offset, 0)));
+    const limit = Math.max(1, Math.min(50, toInt(req.query.limit, 50)));
+    const pattern = likeContains(search);
+    const result = await query(`SELECT b.code AS item_code,
+      COALESCE(NULLIF(b.name_1,''),NULLIF(b.name_2,''),NULLIF(b.name_eng_1,''),b.code) AS item_name,
+      COALESCE(b.name_1,'') AS name_1, COALESCE(b.name_eng_1,'') AS name_eng_1
+      FROM ic_inventory b
+      WHERE ($1::text='' OR b.code ILIKE $2 OR b.name_1 ILIKE $2 OR b.name_2 ILIKE $2 OR b.name_eng_1 ILIKE $2 OR b.name_eng_2 ILIKE $2)
+      ORDER BY b.code OFFSET $3 LIMIT $4`, [search, pattern, offset, limit + 1]);
+    res.json({ success: true, data: result.rows.slice(0, limit), offset, has_more: result.rows.length > limit });
+  } catch (error) {
+    console.error('Content product picker:', error);
+    res.status(500).json({ success: false, message: 'โหลดตัวเลือกสินค้าไม่สำเร็จ' });
+  }
+});
+
 // GET /service/v1/getProductList
 // เลียนแบบ Java ทุกอย่าง: dynamic WHERE, pagination ด้วย offset/limit
 router.get("/getProductList", async (req, res) => {

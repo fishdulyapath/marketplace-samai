@@ -359,6 +359,11 @@ const uploadingKey = ref('');
 const content = ref(createDefaultContent());
 const categories = ref([]);
 const products = ref([]);
+const productPage = ref(0);
+const productHasMore = ref(false);
+const productLoading = ref(false);
+const productError = ref('');
+let productRequestId = 0;
 const mediaAssets = ref([]);
 const productSearch = ref('');
 const showProductPicker = ref(false);
@@ -419,7 +424,6 @@ async function loadAdmin() {
         content.value = normalizeContent(home || createDefaultContent());
         categories.value = (categoryResult?.data || []).filter((cat) => !['all', 'promotions', 'productset'].includes(cat.code));
         mediaAssets.value = mediaResult || [];
-        await loadProducts();
     } catch (error) {
         console.error('Error loading admin content:', error);
         toast.add({ severity: 'error', summary: t('adminContent.loadFailed'), detail: error.message, life: 2500 });
@@ -1500,15 +1504,33 @@ function promoPreviewStyle(block) {
     return style;
 }
 
-async function loadProducts() {
-    const result = await ProductService.getProducts({ search: productSearch.value, category: '', favorite: 0, includeAllPattern: true }, 0);
-    products.value = result?.data || [];
+async function loadProducts(page = 0) {
+    const requestId = ++productRequestId;
+    productLoading.value = true;
+    productError.value = '';
+    try {
+        const result = await ContentService.getPickerProducts(productSearch.value, page * 50, 50);
+        if (requestId !== productRequestId) return;
+        products.value = (result?.data || []).map((product) => ({
+            ...product,
+            image: ProductService.getProductImageUrl(product.item_code)
+        }));
+        productPage.value = page;
+        productHasMore.value = result?.has_more === true;
+    } catch (error) {
+        if (requestId !== productRequestId) return;
+        productError.value = error?.response?.data?.message || error.message || 'โหลดสินค้าไม่สำเร็จ';
+        products.value = [];
+        productHasMore.value = false;
+    } finally {
+        if (requestId === productRequestId) productLoading.value = false;
+    }
 }
 
 function openProductPicker(index) {
     activeSectionIndex.value = index;
     showProductPicker.value = true;
-    if (!products.value.length) loadProducts();
+    loadProducts(0);
 }
 
 function toggleSectionProduct(productCode, sectionIndex = activeSectionIndex.value) {
@@ -2354,23 +2376,32 @@ function handleImageError(event) {
 
         <Dialog v-model:visible="showProductPicker" modal :header="t('adminContent.productDialog')" :style="{ width: 'min(920px, 96vw)' }">
             <div class="picker-search">
-                <InputText v-model="productSearch" :placeholder="t('adminContent.productSearchPlaceholder')" :aria-label="t('adminContent.productSearchPlaceholder')" @keydown.enter="loadProducts" />
-                <Button icon="pi pi-search" :label="t('adminContent.search')" @click="loadProducts" />
+                <InputText v-model="productSearch" :placeholder="t('adminContent.productSearchPlaceholder')" :aria-label="t('adminContent.productSearchPlaceholder')" @keydown.enter="loadProducts(0)" />
+                <Button icon="pi pi-search" :label="t('adminContent.search')" :loading="productLoading" @click="loadProducts(0)" />
             </div>
+            <div v-if="productError" class="mb-3 text-red-600" role="alert">{{ productError }} <Button :label="t('common.reload')" text size="small" @click="loadProducts(productPage)" /></div>
+            <div v-if="productLoading" class="mb-3 text-gray-500">{{ t('adminContent.loading') }}</div>
             <div class="product-picker-grid">
                 <button
                     v-for="product in products"
                     :key="product.item_code"
                     type="button"
+                    :disabled="productLoading"
                     :class="['product-pick-card', isProductSelected(product.item_code) ? 'active' : '']"
                     :aria-label="`${isProductSelected(product.item_code) ? 'Remove product' : 'Select product'} ${product.item_name || product.item_code}`"
                     :aria-pressed="isProductSelected(product.item_code)"
                     @click="toggleSectionProduct(product.item_code)"
                 >
-                    <img :src="product.image" :alt="product.item_name" @error="handleImageError" />
+                    <img :src="product.image" :alt="product.item_name" loading="lazy" @error="handleImageError" />
                     <span>{{ product.item_name }}</span>
                     <small>{{ product.item_code }}</small>
                 </button>
+            </div>
+            <div v-if="!productLoading && !productError && !products.length" class="mb-3 text-gray-500">ไม่พบสินค้า</div>
+            <div class="flex align-items-center justify-content-between gap-2 mt-3">
+                <Button label="ก่อนหน้า" icon="pi pi-chevron-left" text :disabled="productLoading || productPage === 0" @click="loadProducts(productPage - 1)" />
+                <span>หน้า {{ productPage + 1 }}</span>
+                <Button label="ถัดไป" icon="pi pi-chevron-right" iconPos="right" text :disabled="productLoading || !productHasMore" @click="loadProducts(productPage + 1)" />
             </div>
         </Dialog>
 
