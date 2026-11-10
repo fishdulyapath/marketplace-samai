@@ -5,7 +5,7 @@ import PendingOrderService from '@/services/PendingOrderService';
 import InventoryService from '@/services/InventoryService';
 import AllocationLine from './AllocationLine.vue';
 import { allocationPayload } from '@/utils/orderAllocations';
-import { createOrderDraftStore, documentSignature, requestAge, unassignedRows } from '@/utils/orderWorkspace';
+import { bulkLocationRows, createOrderDraftStore, documentSignature, mergeSameLocation, requestAge } from '@/utils/orderWorkspace';
 
 const props = defineProps({ employeeCode: { type: String, default: '' }, draftScope: { type: String, default: () => import.meta.env.VITE_APP_API || location.origin } });
 const sort = ref('oldest'),
@@ -144,7 +144,8 @@ const riskReasons = (item) =>
     ].filter(Boolean);
 const reviewRisk = computed(() => selected.value?.items.filter((item) => riskReasons(item).length) || []);
 const reviewNormal = computed(() => selected.value?.items.filter((item) => !riskReasons(item).length) || []);
-const bulkTargets = computed(() => unassignedRows(selected.value?.items || [], bulkMode.value === 'selected' ? checkedLines.value : undefined));
+const bulkTargets = computed(() => bulkLocationRows(selected.value?.items || [], bulkMode.value, checkedLines.value));
+const bulkReplacements = computed(() => bulkTargets.value.filter((row) => row.wh_code || row.shelf_code).length);
 async function nextIncomplete(after) {
     const items = selected.value?.items || [];
     const index = items.findIndex((item) => item.line_number === after);
@@ -198,17 +199,25 @@ async function loadBulkShelves() {
 function applyBulk() {
     if (busy.value || bulkBusy.value || !warehouses.value.some((wh) => wh.code === bulkWh.value) || !bulkShelves.value.some((shelf) => shelf.code === bulkShelf.value)) return;
     const targets = bulkTargets.value;
+    const replaced = bulkReplacements.value;
+    const touched = new Set(targets);
     batchEditing = true;
     targets.forEach((row) => {
         row.wh_code = bulkWh.value;
         row.shelf_code = bulkShelf.value;
+    });
+    selected.value.items.forEach((item) => {
+        if (!item.allocations.some((row) => touched.has(row))) return;
+        item.allocations = mergeSameLocation(item.allocations);
+        doneLines.value[item.line_number] = false;
+        folded.value[item.line_number] = false;
     });
     batchEditing = false;
     quote.value = null;
     persistDraft(selected.value);
     bulkRevision.value++;
     bulkVisible.value = false;
-    notice.value = `กำหนดตำแหน่งให้ ${targets.length} รายการจัดสรร โดยไม่ทับรายการที่มีตำแหน่งแล้ว`;
+    notice.value = `กำหนดตำแหน่งให้ ${targets.length} รายการจัดสรร${replaced ? ` (เปลี่ยนตำแหน่งเดิม ${replaced} รายการ)` : ''} · กรุณากดเสร็จและถัดไปอีกครั้ง`;
 }
 function displayDate(value) {
     return value ? String(value).slice(0, 10) : '—';
@@ -607,12 +616,13 @@ onBeforeUnmount(() => {
             /></template>
         </Dialog>
         <Dialog v-model:visible="bulkVisible" modal header="จัดคลังหลายรายการ" :style="{ width: 'min(620px, 95vw)' }">
-            <p>เติมเฉพาะรายการที่ว่างทั้งคลังและที่เก็บ ไม่เปลี่ยนรหัสสินค้า จำนวน หรือทับตำแหน่งที่เลือกไว้</p>
+            <p>เลือกว่าจะเติมรายการที่ยังว่าง หรือเปลี่ยนคลังและที่เก็บของบรรทัดที่ติ๊กไว้ โดยคงรหัสสินค้าและจำนวนเดิม</p>
             <div class="bulk-controls">
-                <label><input v-model="bulkMode" type="radio" value="all" /> ทุกรายการที่ยังไม่มีตำแหน่ง</label><label><input v-model="bulkMode" type="radio" value="selected" /> เฉพาะบรรทัดที่ติ๊กเลือก ({{ checkedLines.length }})</label>
+                <label><input v-model="bulkMode" type="radio" value="all" /><span>เติมเฉพาะรายการที่ยังไม่มีตำแหน่ง</span></label>
+                <label><input v-model="bulkMode" type="radio" value="selected" /><span>เปลี่ยนทุกจุดจัดสรรในบรรทัดที่ติ๊ก ({{ checkedLines.length }})</span></label>
             </div>
             <p>
-                <strong>จะเติมตำแหน่งให้ {{ bulkTargets.length }} รายการจัดสรร</strong>
+                <strong>จะกำหนดตำแหน่งให้ {{ bulkTargets.length }} รายการจัดสรร</strong><span v-if="bulkReplacements"> · ทับตำแหน่งเดิม {{ bulkReplacements }} รายการ</span>
             </p>
             <div class="bulk-controls">
                 <label>คลัง<Select v-model="bulkWh" :options="warehouses" optionLabel="label" optionValue="code" filter placeholder="เลือกคลัง" aria-label="คลังหลายรายการ" @change="loadBulkShelves" /></label

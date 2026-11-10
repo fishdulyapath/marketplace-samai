@@ -89,3 +89,20 @@ export function requestAge(createdAt, now = Date.now()) {
 export function unassignedRows(items, chosenLines) {
     return items.flatMap((item) => (!chosenLines || chosenLines.includes(item.line_number) ? item.allocations.filter((row) => !row.wh_code && !row.shelf_code) : []));
 }
+export function bulkLocationRows(items, mode, chosenLines) {
+    if (mode === 'selected') return items.flatMap((item) => (chosenLines.includes(item.line_number) ? item.allocations : []));
+    return unassignedRows(items);
+}
+export function mergeSameLocation(rows) {
+    const merged = new Map();
+    for (const row of rows) {
+        const key = `${row.item_code}\0${row.wh_code}\0${row.shelf_code}`;
+        if (merged.has(key)) {
+            const current = merged.get(key);
+            current.qty = Math.round((Number(current.qty) + Number(row.qty)) * 1e8) / 1e8;
+        } else {
+            merged.set(key, { ...row });
+        }
+    }
+    return [...merged.values()];
+}

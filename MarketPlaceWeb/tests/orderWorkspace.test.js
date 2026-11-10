@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createOrderDraftStore, DRAFT_TTL, remainingQty, requestAge, unassignedRows } from '../src/utils/orderWorkspace';
+import { bulkLocationRows, createOrderDraftStore, DRAFT_TTL, mergeSameLocation, remainingQty, requestAge, unassignedRows } from '../src/utils/orderWorkspace';
 const memory = () => {
     const data = new Map();
     return {
@@ -103,13 +103,28 @@ describe('workspace speed helpers', () => {
         source.items.push({
             line_number: 2,
             allocations: [
-                { wh_code: 'W2', shelf_code: '' },
+                { wh_code: 'W2', shelf_code: 'S2' },
                 { wh_code: '', shelf_code: '' }
             ]
         });
         expect(unassignedRows(source.items).length).toBe(2);
         expect(unassignedRows(source.items, [1]).length).toBe(1);
         expect(unassignedRows(source.items, []).length).toBe(0);
+        expect(bulkLocationRows(source.items, 'all', [2]).length).toBe(2);
+        expect(bulkLocationRows(source.items, 'selected', [2]).length).toBe(2);
+        expect(bulkLocationRows(source.items, 'selected', []).length).toBe(0);
+    });
+    it('combines split quantities when changing them to the same stock location', () => {
+        const rows = [
+            { item_code: 'A', qty: 0.1, wh_code: 'W', shelf_code: 'S' },
+            { item_code: 'A', qty: 0.2, wh_code: 'W', shelf_code: 'S' },
+            { item_code: 'B', qty: 1, wh_code: 'W', shelf_code: 'S' }
+        ];
+        expect(mergeSameLocation(rows)).toEqual([
+            { item_code: 'A', qty: 0.3, wh_code: 'W', shelf_code: 'S' },
+            { item_code: 'B', qty: 1, wh_code: 'W', shelf_code: 'S' }
+        ]);
+        expect(rows[0].qty).toBe(0.1);
     });
     it('formats queue age without inventing missing timestamps', () => {
         expect(requestAge('2026-09-30T00:00:00Z', Date.parse('2026-09-30T02:00:00Z'))).toBe('รอ 2 ชม.');

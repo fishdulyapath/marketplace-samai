@@ -952,9 +952,33 @@ router.get("/getProductList", async (req, res) => {
 
     const includeAllPattern = ["1", "true", "yes"].includes(String(strIncludeAllPattern).trim().toLowerCase());
     const patternWhere = includeAllPattern ? "" : " and b.item_pattern = '[W]' ";
+    const offset = Math.max(0, toInt(strOffset, 0));
+    const limit = Math.max(1, toInt(strLimit, 20));
+    const sortSql = strPremium === "1" && safeFeatureType !== "recommend" ? "COALESCE(mfp.line_number,0), b.code" : "b.code";
+    // Without the stock-only filter, page first. The ERP stock function must
+    // receive only the codes being displayed, not every code in ic_inventory.
+    // Stock-filtered requests retain the original stock-before-pagination path.
+    const pageFirst = strStock !== "1";
+    const pageCte = pageFirst ?
+      `paged_products AS (` +
+      ` SELECT b.code, b.item_type` +
+      ` FROM ic_inventory b` +
+      ` LEFT JOIN ic_inventory_detail c ON c.ic_code=b.code` +
+      ` LEFT JOIN marketplace_featured_product mfp ON mfp.item_code=b.code` +
+      `   AND mfp.feature_type='${safeFeatureType}'` +
+      `   AND COALESCE(mfp.status,1)=1` +
+      `   AND (mfp.from_date IS NULL OR mfp.from_date <= CURRENT_DATE)` +
+      `   AND (mfp.to_date IS NULL OR mfp.to_date >= CURRENT_DATE)` +
+      ` LEFT JOIN ar_item_by_customer arc ON arc.ic_code=b.code AND arc.ar_code='${safeCustCodeSql}'` +
+      ` WHERE 1=1 ${patternWhere} ${whereFinal}` +
+      ` ORDER BY ${sortSql} OFFSET ${offset} LIMIT ${limit}` +
+      `), ` : "";
+    const stockSource = pageFirst ?
+      "SELECT code AS item_code, ''::text AS wh_code FROM paged_products WHERE COALESCE(item_type,0)<>3" :
+      "SELECT code AS item_code, ''::text AS wh_code FROM ic_inventory WHERE COALESCE(item_type,0)<>3" + (includeAllPattern ? "" : " AND item_pattern='[W]'");
 
     const baseFrom =
-      ` FROM ic_inventory b` +
+      (pageFirst ? ` FROM paged_products page JOIN ic_inventory b ON b.code=page.code` : ` FROM ic_inventory b`) +
       ` LEFT JOIN ic_inventory_detail c ON b.code=c.ic_code` +
       ` LEFT JOIN normal_stock gs ON gs.ic_code=b.code` +
       ` LEFT JOIN ic_group g ON g.code=b.group_main` +
@@ -995,7 +1019,7 @@ router.get("/getProductList", async (req, res) => {
       ` WHERE 1=1 ${patternWhere} ${whereFinal}`;
 
     const dataSQL =
-      `WITH ${groupedStockCtes("SELECT code AS item_code, ''::text AS wh_code FROM ic_inventory WHERE COALESCE(item_type,0)<>3" + (includeAllPattern ? "" : " AND item_pattern='[W]'"))} ` +
+      `WITH ${pageCte}${groupedStockCtes(stockSource)} ` +
       `SELECT b.code AS item_code, COALESCE(b.name_1,'') AS name_1, COALESCE(b.name_2,'') AS name_2,` +
       ` COALESCE(b.name_eng_1,'') AS name_eng_1, COALESCE(b.name_eng_2,'') AS name_eng_2,` +
       ` COALESCE(c.dimension_32,'') AS dimension_32, COALESCE(c.dimension_35,'') AS dimension_35,` +
@@ -1011,7 +1035,7 @@ router.get("/getProductList", async (req, res) => {
       ` CASE WHEN COALESCE(b.item_grade,'') = 'R' THEN '1' ELSE '0' END AS is_return,` +
       ` CASE WHEN ${activePromotionCondition} THEN '1' ELSE '0' END AS is_promotion,` +
       ` COALESCE(arc.status,0) AS favorite_item` +
-      `${baseFrom} ORDER BY ${strPremium === "1" && safeFeatureType !== "recommend" ? "COALESCE(mfp.line_number,0), b.code" : "b.code"} OFFSET ${Math.max(0, toInt(strOffset, 0))} LIMIT ${Math.max(1, toInt(strLimit, 20))}`;
+      `${baseFrom} ORDER BY ${sortSql}${pageFirst ? "" : ` OFFSET ${offset} LIMIT ${limit}`}`;
 
     const dataResult = await query(dataSQL, []);
 

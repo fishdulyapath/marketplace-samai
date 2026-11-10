@@ -12,6 +12,9 @@ const pickerIndex = ref(null),
     pickerSearch = ref(''),
     picking = ref(false),
     pickerError = ref('');
+const giftLocationIndex = ref(null),
+    giftWarehouse = ref(''),
+    giftShelf = ref('');
 const options = ref([]);
 const shelves = ref({});
 const shelfBusy = ref({});
@@ -22,7 +25,8 @@ const stockError = ref('');
 let alive = true;
 let version = 0;
 const isSet = computed(() => Number(props.source.item_type) === 3);
-const isFixed = computed(() => isSet.value || Number(props.source.is_permium) === 1);
+const isGift = computed(() => Number(props.source.is_permium) === 1);
+const isFixed = computed(() => isSet.value || isGift.value);
 const rows = computed(() => props.source.allocations);
 const qty = (value) => (value == null ? 'ไม่ทราบยอด' : Number(value).toLocaleString('th-TH', { maximumFractionDigits: 8 }));
 const optionFor = (row) => options.value.find((option) => option.item_code === row.item_code);
@@ -53,6 +57,25 @@ function openPicker(index) {
     pickerIndex.value = index;
     pickerSearch.value = '';
     pickerError.value = '';
+}
+function openGiftLocation(index) {
+    const row = rows.value[index];
+    if (!row) return;
+    giftLocationIndex.value = index;
+    giftWarehouse.value = row.wh_code || '';
+    giftShelf.value = row.shelf_code || '';
+    if (giftWarehouse.value) loadShelves(giftWarehouse.value);
+}
+function changeGiftWarehouse() {
+    giftShelf.value = '';
+    loadShelves(giftWarehouse.value);
+}
+function applyGiftLocation() {
+    const row = rows.value[giftLocationIndex.value];
+    if (!row || !props.warehouses?.some((wh) => wh.code === giftWarehouse.value) || !shelves.value[giftWarehouse.value]?.some((shelf) => shelf.code === giftShelf.value)) return;
+    row.wh_code = giftWarehouse.value;
+    row.shelf_code = giftShelf.value;
+    giftLocationIndex.value = null;
 }
 async function selectCandidate(option, location) {
     if (props.disabled || picking.value || !option.selectable) return;
@@ -178,7 +201,7 @@ onBeforeUnmount(() => {
             <span :class="health.short ? 'validation' : 'complete'">✓ จัดสรรครบ{{ health.short ? ' · สต๊อกไม่พอ' : health.unknown ? ' · ไม่ทราบสต๊อก' : '' }}</span>
         </div>
         <div v-show="!collapsed || validation">
-            <p v-if="isFixed" class="set-note">{{ isSet ? 'ชุดและส่วนประกอบใช้คลัง / ที่เก็บเดียวกัน ไม่เปลี่ยนรหัสหรือแบ่งจำนวน' : 'ของแถมคงสินค้าและราคา 0 ตามคำขอ เปลี่ยนได้เฉพาะคลัง / ที่เก็บ' }}</p>
+            <p v-if="isSet" class="set-note">ชุดและส่วนประกอบใช้คลัง / ที่เก็บเดียวกัน ไม่เปลี่ยนรหัสหรือแบ่งจำนวน</p>
             <details v-if="source.sub_item?.length" class="set-note">
                 <summary>ส่วนประกอบ {{ source.sub_item.length }} รายการ</summary>
                 <p v-for="sub in source.sub_item" :key="sub.line_number">{{ sub.item_code }} · {{ sub.item_name }} × {{ sub.qty }} {{ sub.unit_code }}</p>
@@ -207,6 +230,7 @@ onBeforeUnmount(() => {
                             ><strong v-else>{{ row.item_code }}</strong
                             ><small>{{ optionFor(row)?.item_name || source.item_name }}</small
                             ><Button v-if="!isFixed" label="เลือกสินค้า + ตำแหน่ง" icon="pi pi-map-marker" outlined size="small" :disabled="disabled || loading" @click="openPicker(index)" />
+                            <Button v-if="isGift" label="เลือกคลัง + ที่เก็บ" icon="pi pi-map-marker" outlined size="small" :disabled="disabled" @click="openGiftLocation(index)" />
                         </div>
                         <label
                             ><span>จำนวน ({{ source.unit_code }})</span><InputNumber v-model="row.qty" :min="0" :max="Number(source.qty)" :maxFractionDigits="8" :aria-label="`จำนวนจัดสรร ${index + 1}`" :disabled="disabled || isFixed" /><Button
@@ -329,10 +353,65 @@ onBeforeUnmount(() => {
             </article>
             <template #footer><small>สต๊อกแสดงเพื่อช่วยตัดสินใจ · ระบบจะคำนวณราคา ภาษี และยอด QT ล่าสุดก่อนยืนยัน</small><Button label="กลับ" outlined :disabled="picking" @click="pickerIndex = null" /></template>
         </Dialog>
+        <Dialog
+            :visible="giftLocationIndex !== null"
+            modal
+            header="เลือกคลังและที่เก็บของแถม"
+            :style="{ width: 'min(520px, 95vw)' }"
+            @update:visible="
+                (value) => {
+                    if (!value) giftLocationIndex = null;
+                }
+            "
+        >
+            <p>{{ source.item_code }} · {{ qty(source.qty) }} {{ source.unit_code }}</p>
+            <div class="gift-location-fields">
+                <label>คลัง<Select v-model="giftWarehouse" :options="warehouses" optionLabel="label" optionValue="code" filter placeholder="เลือกคลัง" aria-label="คลังของแถม" @change="changeGiftWarehouse" /></label>
+                <label
+                    >ที่เก็บ<Select
+                        v-model="giftShelf"
+                        :options="shelves[giftWarehouse] || []"
+                        optionLabel="label"
+                        optionValue="code"
+                        filter
+                        placeholder="เลือกที่เก็บ"
+                        aria-label="ที่เก็บของแถม"
+                        :loading="shelfBusy[giftWarehouse]"
+                        :disabled="!giftWarehouse || !!shelfBusy[giftWarehouse]"
+                /></label>
+            </div>
+            <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+            <template #footer
+                ><Button label="กลับ" outlined @click="giftLocationIndex = null" /><Button
+                    label="ใช้ตำแหน่งนี้"
+                    :disabled="!warehouses?.some((wh) => wh.code === giftWarehouse) || !shelves[giftWarehouse]?.some((shelf) => shelf.code === giftShelf)"
+                    @click="applyGiftLocation"
+            /></template>
+        </Dialog>
     </article>
 </template>
 
 <style scoped>
+.gift-location-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 1rem 0;
+}
+.gift-location-fields label {
+    display: grid;
+    gap: 0.35rem;
+    min-width: 0;
+}
+.gift-location-fields :deep(.p-select) {
+    width: 100%;
+    min-width: 0;
+}
+@media (max-width: 520px) {
+    .gift-location-fields {
+        grid-template-columns: 1fr;
+    }
+}
 .line-check {
     display: flex;
     align-items: center;
