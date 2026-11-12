@@ -3,7 +3,8 @@ const router = express.Router();
 const crypto = require('crypto');
 const uuidv4 = () => crypto.randomUUID();
 const { pool, withTransaction, query } = require('../db');
-const { getCancelDocPattern, getOrderDocSource, getSalePremiumEnabled, marketplaceDocWhere } = require('../utils/marketplaceSalesSettings');
+const { getCancelDocPattern, getOrderDocSource, getPickupSchedule, getSalePremiumEnabled, marketplaceDocWhere } = require('../utils/marketplaceSalesSettings');
+const { pickupRemark } = require('../utils/pickupSchedule');
 const { stripClientPremiumFlagsFromItems, premiumFlagValue, enforcePremiumLineValuesForItems } = require('../utils/salePremiumGuard');
 const { serverDocDate, serverDocTime } = require('../utils/serverTime');
 const { getMaxAllowanceForUnit } = require('../utils/maxAllowance');
@@ -105,27 +106,26 @@ function isPreorderDocument(docNo, remark) {
   return /^PREQT/i.test(String(docNo || '').trim()) || hasPreorderMarker(remark);
 }
 
-// รับเอง (รีวิว 260908 สไลด์ 6) — ลูกค้าระบุว่า "ข้อมูลจะอยู่ที่ หมายเหตุ ขอ QT"
-// จึงประกอบเป็นข้อความบรรทัดเดียวไปต่อกับหมายเหตุ ไม่ได้เพิ่มคอลัมน์ใหม่ใน ic_trans
-// (คู่กับ MarketPlaceWeb/src/utils/pickupSlots.js ที่ประกอบข้อความเดียวกันไว้โชว์)
+// รับเอง — ประกอบข้อความบรรทัดเดียวไปต่อกับหมายเหตุ MPR ไม่เพิ่มคอลัมน์ใน ic_trans
+// เอกสารเก่าเก็บข้อความเดิมไว้ ส่วนเอกสารใหม่ใช้เบอร์โทรผู้รับ
 function buildPickupRemark(pickup = {}) {
   const parts = [];
   const date = String(pickup.date || '').trim();
   const slot = String(pickup.timeSlot || '').trim();
   const receiver = String(pickup.receiver || '').trim();
-  const vehicle = String(pickup.vehicle || '').trim();
+  const phone = String(pickup.phone || '').trim();
 
   if (date) parts.push(date);
   if (slot) parts.push(slot);
   if (receiver) parts.push(`ผู้รับ: ${receiver}`);
-  if (vehicle) parts.push(`ทะเบียน: ${vehicle}`);
+  if (phone) parts.push(`เบอร์โทร: ${phone}`);
 
   return parts.length > 0 ? `รับเอง ${parts.join(' ')}` : '';
 }
 
 // ใบเสนอราคาใน SML ผู้ใช้ ERP ดูช่อง remark ช่องเดียวเป็นหลัก
 // ส่งให้ (send_type=1) จึงรวม "ส่งให้ + ที่อยู่ + หมายเหตุลูกค้า" ไว้ในช่องเดียว
-// รับเอง (send_type=0) รวม "รับเอง + วัน/เวลา/ผู้รับ/ทะเบียน + หมายเหตุ"
+// รับเอง (send_type=0) รวม "รับเอง + วัน/เวลา/ผู้รับ/เบอร์โทร + หมายเหตุ"
 // (ที่อยู่ฉบับเต็มยังเก็บแยกที่ ic_trans_shipment เหมือนเดิม)
 function buildDeliveryRemark(sendType, shipAddress, remark, pickup = {}) {
   if (String(sendType) === '1') {
@@ -507,7 +507,7 @@ router.post('/sendorder', pendingIdentity, async (req, res) => {
       date: String(obj.pickup_date || '').trim().slice(0, 20),
       timeSlot: String(obj.pickup_time_slot || '').trim().slice(0, 20),
       receiver: String(obj.pickup_receiver || '').trim().slice(0, 80),
-      vehicle: String(obj.pickup_vehicle || '').trim().slice(0, 40)
+      phone: String(obj.pickup_phone || '').trim().slice(0, 30)
     };
     const contact_code = obj.contact_code || '';
     const emp_code = '';
@@ -696,6 +696,12 @@ router.post('/sendorder', pendingIdentity, async (req, res) => {
         } catch {
           return { duplicate: true, doc_no: '' };
         }
+      }
+
+      if (String(send_type) === '0') {
+        const schedule = await getPickupSchedule(client);
+        pickupRemark(obj, schedule);
+        pickupInfo.date = String(obj.pickup_date).split('-').reverse().join('/');
       }
 
       // โหมด client (ค่าเริ่มต้น): ยังใช้ doc_no ที่ client ส่งมา + duplicate check แบบเดิม
@@ -1007,7 +1013,7 @@ router.post('/sendorder', pendingIdentity, async (req, res) => {
         price_mismatch_items: (ex.violations || []).map((v) => ({ item_code: v.item_code, unit_code: v.unit_code })),
       });
     }
-    return res.status(400).json({ success: false, msg: ex.message, message: ex.message });
+    return res.status(400).json({ success: false, msg: ex.code || ex.message, message: ex.message });
   }
 });
 

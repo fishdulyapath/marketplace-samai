@@ -22,6 +22,11 @@ export default {
         return data;
     },
 
+    async getPickupAvailability() {
+        const { data } = await api.get(servicePath('/sales-settings/pickup-availability'));
+        return data?.data || [];
+    },
+
     async searchProducts(search = '', limit = 50) {
         const { data } = await api.get(servicePath('/sales-settings/product-search'), {
             params: { search, limit }

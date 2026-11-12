@@ -7,7 +7,7 @@ const COMPLETE_PICKUP = {
     pickupDate: new Date(2026, 8, 10),
     pickupTimeSlot: '09:00-10:00',
     pickupReceiver: 'สมชาย',
-    pickupVehicle: 'กข 1234'
+    pickupPhone: '0812345678'
 };
 
 describe('checkout form readiness', () => {
@@ -30,7 +30,8 @@ describe('checkout form readiness', () => {
         expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupDate: null })).toBe('requirePickupDate');
         expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupTimeSlot: '' })).toBe('requirePickupTimeSlot');
         expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupReceiver: '  ' })).toBe('requirePickupReceiver');
-        expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupVehicle: '' })).toBe('requirePickupVehicle');
+        expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupPhone: '' })).toBe('requirePickupPhone');
+        expect(getCheckoutFormIssue({ ...COMPLETE_PICKUP, pickupPhone: 'กข 1234' })).toBe('requirePickupPhone');
     });
 
     it('ข้อมูลรับเองไม่ถูกบังคับเมื่อเลือกจัดส่ง', () => {

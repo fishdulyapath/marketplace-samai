@@ -112,7 +112,7 @@ InventoryService.getWarehouseList = async () => [
     { code: 'ST02', name_1: 'คลังสำรอง' }
 ];
 InventoryService.getShelfList = async (wh) => [{ code: wh === 'ST01' ? 'LC01' : 'LC02', name_1: wh === 'ST01' ? 'โซนขายปลีก' : 'โซนสำรอง' }];
-const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Workspace, props: { employeeCode: fixture.get('employee') || 'PREVIEW-EMPLOYEE', draftScope: 'isolated-visual-fixture' } }] });
+const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:docNo?', name: 'pending-preview', component: Workspace, props: { employeeCode: fixture.get('employee') || 'PREVIEW-EMPLOYEE', draftScope: 'isolated-visual-fixture' } }] });
 const app = createApp({
     render: () => h('main', { style: 'max-width:1380px;margin:auto;padding:24px 12px' }, [h('p', { style: 'color:#846239;font-size:12px;margin-bottom:20px' }, 'สมัยการค้า / หลังบ้าน · ตัวอย่างข้อมูลจำลอง ไม่เชื่อม ERP'), h(RouterView)])
 });

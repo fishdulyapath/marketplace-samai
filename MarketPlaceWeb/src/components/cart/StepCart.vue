@@ -7,8 +7,9 @@ import { useCartStore } from '@/stores/cartStore';
 import { useLanguageStore } from '@/stores/languageStore';
 import { isSalePremiumItem } from '@/utils/itemType';
 import { pickProductName } from '@/utils/languageDisplay';
+import { cartStockBreakdown, hasCartStockShortage, stockQtyLimit } from '@/utils/cartStockLimit';
+import { isPreorderAllowed, toOrderQty, toStockQty } from '@/utils/preorderSplit';
 import { normalizeMaxOrderQty } from '@/utils/cartLimits';
-import { getPreorderSplit, isPreorderAllowed, toOrderQty, toStockQty } from '@/utils/preorderSplit';
 import { buildBaseUnitRatioText } from '@/utils/unitConversion';
 import { useConfirm } from 'primevue/useconfirm';
 import { useToast } from 'primevue/usetoast';
@@ -97,6 +98,7 @@ const localSearchQuery = ref('');
 
 // Local references to cart data
 const items = computed(() => props.cartItems);
+const cartStepRoot = ref(null);
 
 function isSetItem(item) {
     return String(item?.item_type || '') === '3';
@@ -193,7 +195,7 @@ const totalLines = computed(() => {
 const visibleStockIssueItems = computed(() => items.value.filter((item) => !props.isLoadingStock && isStockBlocked(item)));
 const visibleStockIssueCount = computed(() => visibleStockIssueItems.value.length);
 const hasVisibleStockIssues = computed(() => visibleStockIssueCount.value > 0);
-const preorderItems = computed(() => []);
+const preorderItems = computed(() => items.value.filter((item) => stockBreakdown(item)?.preorderQty > 0));
 const preorderLineCount = computed(() => preorderItems.value.length);
 const checkoutBlockMessage = computed(() => {
     if (props.checkoutLocked) return props.checkoutLockMessage || t('cartFlow.partialCartReviewNotice', { docNos: '-' });
@@ -203,7 +205,46 @@ const checkoutBlockMessage = computed(() => {
 const editingKey = ref(null);
 const savingQty = ref(false);
 const itemKey = item => JSON.stringify([item.guid_code, item.item_code, item.unit_code]);
-const isCheckoutDisabled = computed(() => props.checkoutLocked || !!editingKey.value || savingQty.value);
+const isCheckoutDisabled = computed(() => props.checkoutLocked || !!editingKey.value || savingQty.value || isValidatingStock.value || props.isLoadingStock);
+const getQuantityLimit = (item) => stockQtyLimit(item, items.value, !props.isLoadingStock);
+const stockBreakdown = (item) => cartStockBreakdown(item, items.value, !props.isLoadingStock);
+const quantityDraft = ref(null);
+function draftExceedsLimit(item) {
+    const max = getQuantityLimit(item);
+    return quantityDraft.value?.key === itemKey(item) && !props.isLoadingStock && max !== null && quantityDraft.value.qty > max;
+}
+const isStockUnknown = (item) => !props.isLoadingStock && !props.isChangingPage && !props.isLoadingMore && !isSalePremiumItem(item) && toStockQty(item.balance_qty) === null;
+function quantityLimitText(item) {
+    const allowance = normalizeMaxOrderQty(item.max_order_qty);
+    const stock = stockBreakdown(item);
+    if (allowance !== null && (isPreorderAllowed(item) || !stock || allowance <= stock.maxReadyQty)) {
+        return t('productDetail.maxAllowanceHint', { max: formatStockQty(allowance), unit: item.unit_code || '' });
+    }
+    return t('cartPage.stockAtLimit');
+}
+const formatStockQty = (qty) => toCartNumber(qty).toLocaleString(currentLocaleCode(), { maximumFractionDigits: 2 });
+function stockNeedText(item) {
+    const stock = stockBreakdown(item);
+    if (!stock) return '';
+    if (stock.baseUnit && stock.ratio !== 1) {
+        return t('cartPage.stockNeedAvailableBase', {
+            required: formatStockQty(stock.requiredBase), available: formatStockQty(stock.availableForLineBase), unit: stock.baseUnit
+        });
+    }
+    return t('cartPage.stockNeedAvailableQty', {
+        required: formatStockQty(stock.requestedQty), available: formatStockQty(stock.maxReadyQty), unit: item.unit_code || ''
+    });
+}
+function goToFirstStockIssue() {
+    cartStepRoot.value?.querySelector('[data-stock-issue="true"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function handlePrimaryAction() {
+    if (hasVisibleStockIssues.value) {
+        goToFirstStockIssue();
+        return;
+    }
+    proceedToCheckout();
+}
 async function saveDraft(item, qty) {
     savingQty.value = true;
     try {
@@ -214,10 +255,11 @@ async function saveDraft(item, qty) {
 }
 async function changeQuantity(item, delta) {
     if (savingQty.value) return;
+    if (delta > 0 && isStockUnknown(item)) return;
     const current = toOrderQty(item.qty) || 1;
     const next = Math.max(1, current + delta);
-    const limit = getMaxOrderQty(item);
-    if (next === current || (limit !== null && next > limit)) return;
+    const limit = getQuantityLimit(item);
+    if (next === current || (delta > 0 && limit !== null && next > limit)) return;
     await saveDraft(item, next);
 }
 function quantityInputKeydown(event) {
@@ -225,16 +267,18 @@ function quantityInputKeydown(event) {
     if (!/^[0-9]$/.test(event.key) && !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault();
 }
 async function commitQuantityInput(item, event) {
+    quantityDraft.value = null;
     const requested = Number(String(event.target.value).trim());
-    const limit = getMaxOrderQty(item);
+    const limit = getQuantityLimit(item);
     const next = Number.isSafeInteger(requested) && requested > 0 ? requested : 1;
-    const bounded = limit === null ? next : Math.min(next, limit);
+    const bounded = isStockUnknown(item) && next > toOrderQty(item.qty) ? toOrderQty(item.qty)
+        : limit === null ? next : Math.max(1, Math.min(next, limit));
     event.target.value = String(bounded);
     if (bounded !== toOrderQty(item.qty)) await saveDraft(item, bounded);
 }
 const checkoutButtonLabel = computed(() => {
     if (props.checkoutLocked) return t('cartPage.checkoutLocked');
-    if (hasVisibleStockIssues.value) return t('cartPage.fixStockFirst');
+    if (hasVisibleStockIssues.value) return t('cartPage.stockGoFix');
     return t('cartPage.checkout');
 });
 
@@ -243,7 +287,7 @@ const isExceedingStock = (item) => {
     if (isSalePremiumItem(item)) return false;
     // ตรวจสอบว่ามี balance_qty และเป็นค่าที่ใช้งานได้
     const balanceQty = toStockQty(item.balance_qty);
-    return balanceQty !== null && toOrderQty(item.qty) > balanceQty;
+    return balanceQty !== null && hasCartStockShortage(item, items.value, !props.isLoadingStock);
 };
 
 // Check if item is out of stock
@@ -254,22 +298,7 @@ const isOutOfStock = (item) => {
     return balanceQty !== null && balanceQty <= 0;
 };
 
-const isStockBlocked = () => false;
-
-const getStockBlockMessage = (item) => {
-    const maxQty = getMaxAvailable(item);
-    if (maxQty <= 0) return t('cartPage.preorderOutOfStockHint');
-    return t('cartPage.preorderNotAllowedHint', { qty: formatQty(maxQty), unit: item.unit_code });
-};
-
-const getPreorderSplitText = (item) => {
-    const split = getPreorderSplit(item);
-    return t('cartPage.preorderSplitLine', {
-        ready: formatQty(split.readyQty),
-        preorder: formatQty(split.preorderQty),
-        unit: item.unit_code || ''
-    });
-};
+const isStockBlocked = (item) => hasCartStockShortage(item, items.value, !props.isLoadingStock);
 
 const getStockIssueShortageQty = (issue) => {
     const explicitShortage = toCartNumber(issue?.shortage_qty, null);
@@ -277,27 +306,13 @@ const getStockIssueShortageQty = (issue) => {
     return Math.max(0, toCartNumber(issue?.qty_in_cart, 0) - toCartNumber(issue?.balance_qty, 0));
 };
 
-// Get maximum available stock for an item
-const getStockQtyOrNull = (item) => {
-    return toStockQty(item.balance_qty);
-};
-
-const getMaxAvailable = (item) => {
-    return getStockQtyOrNull(item) ?? 0;
-};
-
 async function adjustItemToAvailableStock(item) {
-    const maxQty = getMaxAvailable(item);
+    const maxQty = getQuantityLimit(item) ?? 0;
     if (maxQty <= 0) {
         confirmRemoveItem(item);
         return;
     }
-    await updateItemQuantity(item, maxQty);
-}
-
-// จำนวนสั่งสูงสุดต่อคำสั่งซื้อของรายการนี้ (REQ3) — server ส่งมาแล้วตรงหน่วย, null = ไม่จำกัด
-function getMaxOrderQty(item) {
-    return normalizeMaxOrderQty(item?.max_order_qty);
+    await saveDraft(item, maxQty);
 }
 
 // Update item quantity with specific value
@@ -525,7 +540,7 @@ function handleImageError(event) {
 
 // Navigation
 async function proceedToCheckout() {
-    if (editingKey.value || savingQty.value) return;
+    if (editingKey.value || savingQty.value || isValidatingStock.value || props.isLoadingStock) return;
     if (props.checkoutLocked) {
         toast.add({
             severity: 'warn',
@@ -556,7 +571,24 @@ async function proceedToCheckout() {
         return;
     }
 
-    emit('next-step');
+    // Check the whole cart on the server, including rows not loaded by pagination.
+    try {
+        isValidatingStock.value = true;
+        const custCode = cartStore.custCode || localStorage.getItem('_userCode');
+        if (!custCode) throw new Error(t('cartPage.customerMissing'));
+        const response = await CartService.validateCartStock(custCode);
+        if (!response?.data?.success) throw new Error(t('cartPage.stockCheckFailedDetail'));
+        if (!response.data.is_valid) {
+            stockIssues.value = response.data.stock_issues || [];
+            showStockIssuesDialog.value = true;
+            return;
+        }
+        emit('next-step');
+    } catch (error) {
+        toast.add({ severity: 'error', summary: t('cartPage.stockCheckFailed'), detail: error.message || t('cartPage.stockCheckFailedDetail'), life: 5000 });
+    } finally {
+        isValidatingStock.value = false;
+    }
 }
 
 // ลบรายการโปรโมชันของแถมที่หมดอายุออกจากตะกร้า (REQ5)
@@ -594,7 +626,7 @@ async function removeExpiredPremium(issue) {
 // ปรับจำนวนในตะกร้าลงมาให้เท่าลิมิตต่อคำสั่งซื้อ (REQ3)
 // ไม่ลบรายการทิ้งเหมือนกรณีของแถม เพราะสินค้ายังสั่งได้ แค่ต้องลดจำนวน
 async function adjustToMaxAllowance(issue) {
-    const item = props.items.find((row) => row.item_code === issue.item_code && row.unit_code === issue.unit_code);
+    const item = items.value.find((row) => row.item_code === issue.item_code && row.unit_code === issue.unit_code);
     const maxOrderQty = Number(issue?.max_order_qty);
     if (!item || !Number.isFinite(maxOrderQty) || maxOrderQty <= 0) {
         toast.add({ severity: 'error', summary: t('common.error'), life: 3000 });
@@ -638,7 +670,7 @@ useCheckoutFooter(checkoutFooter);
     </div>
 
     <!-- Cart content -->
-    <div v-else class="cart-step-shell">
+    <div v-else ref="cartStepRoot" class="cart-step-shell">
         <header class="cart-toolbar">
             <div class="cart-title"><i class="pi pi-shopping-cart" aria-hidden="true"></i><h1>{{ t('cart.cart') }}</h1>
                 <span>{{ t('cartPage.summaryLine', { lines: totalLines, items: totalItems }) }}</span>
@@ -685,7 +717,7 @@ useCheckoutFooter(checkoutFooter);
                     <span>{{ t('productDetail.stock') }}</span><span>{{ t('common.qty') }}</span><span>{{ t('common.amount') }}</span>
                 </div>
                 <div class="cart-items-stack">
-                    <div v-for="item in items" :key="item.guid_code + ':' + item.item_code + ':' + item.unit_code" class="cart-line" :class="{ 'cart-line--issue': !isLoadingStock && isStockBlocked(item) }">
+                    <div v-for="item in items" :key="item.guid_code + ':' + item.item_code + ':' + item.unit_code" class="cart-line" :class="{ 'cart-line--issue': !isLoadingStock && isStockBlocked(item) }" :data-stock-issue="!isLoadingStock && isStockBlocked(item) ? 'true' : null">
                         <div class="cart-row">
                             <div class="cart-product">
                                 <button type="button" @click="openProductDetail(item)"><img :src="getProductImage(item)" :alt="getItemDisplayName(item)" @error="handleImageError" /></button>
@@ -704,6 +736,12 @@ useCheckoutFooter(checkoutFooter);
                                 <div v-if="isLoadingStock" class="cart-stock-badge cart-stock-badge--loading">
                                     <i class="pi pi-spin pi-spinner"></i> {{ t('cartPage.checkingStock') }}
                                 </div>
+                                <div v-else-if="isStockUnknown(item)" class="cart-stock-badge cart-stock-badge--warn">
+                                    <i class="pi pi-exclamation-triangle"></i> {{ t('cartPage.stockCheckFailed') }}
+                                </div>
+                                <div v-else-if="stockBreakdown(item)?.preorderQty > 0" class="cart-stock-badge cart-stock-badge--preorder">
+                                    <i class="pi pi-clock"></i> {{ t('cartPage.stockPreorderQty', { qty: formatStockQty(stockBreakdown(item).preorderQty), unit: item.unit_code || '' }) }}
+                                </div>
                                 <div v-else-if="!isSalePremiumItem(item) && isOutOfStock(item)" class="cart-stock-badge cart-stock-badge--out">
                                     <i class="pi pi-times-circle"></i> {{ t('cartPage.outOfStock') }}
                                 </div>
@@ -719,20 +757,39 @@ useCheckoutFooter(checkoutFooter);
                                     :aria-label="`ลดจำนวน ${getItemDisplayName(item)}`" :disabled="savingQty || toOrderQty(item.qty) <= 1" @click="changeQuantity(item, -1)" />
                                 <input :key="`${itemKey(item)}:${item.qty}`" type="text" :value="toOrderQty(item.qty)" class="qty-input"
                                     inputmode="numeric" :aria-label="`จำนวน ${getItemDisplayName(item)}`"
-                                    :disabled="savingQty" @keydown="quantityInputKeydown" @blur="commitQuantityInput(item, $event)" />
+                                    :disabled="savingQty" @keydown="quantityInputKeydown" @input="quantityDraft = { key: itemKey(item), qty: Number($event.target.value) }" @blur="commitQuantityInput(item, $event)" />
                                 <Button icon="pi pi-plus" text rounded size="small" class="qty-step-btn"
                                     :aria-label="`เพิ่มจำนวน ${getItemDisplayName(item)}`"
-                                    :disabled="savingQty || (getMaxOrderQty(item) !== null && toOrderQty(item.qty) >= getMaxOrderQty(item))"
+                                    :disabled="savingQty || props.isLoadingStock || isStockUnknown(item) || (getQuantityLimit(item) !== null && toOrderQty(item.qty) >= getQuantityLimit(item))"
                                     @click="changeQuantity(item, 1)" />
                             </div>
                             <strong class="cart-subtotal">฿{{ formatNumber(getLineTotal(item)) }}</strong>
                             <Button icon="pi pi-trash" :aria-label="t('cartPage.removeItem') + ' ' + getItemDisplayName(item)" severity="danger" text size="small" class="cart-remove" @click="confirmRemoveItem(item)" />
                         </div>
-                        <div v-if="!isLoadingStock && isStockBlocked(item)" class="cart-issue-action">
+                        <div v-if="!isLoadingStock && isStockBlocked(item)" class="cart-issue-action" role="alert">
+                            <div class="cart-issue-copy">
+                                <strong><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ t('cartPage.stockNotEnough') }}</strong>
+                                <span>{{ stockNeedText(item) }}</span>
+                                <small>{{ t('cartPage.stockCanOrder', { qty: formatStockQty(getQuantityLimit(item)), unit: item.unit_code || '' }) }}</small>
+                            </div>
+                            <Button :label="getQuantityLimit(item) > 0 ? t('cartPage.stockAdjustTo', { qty: formatStockQty(getQuantityLimit(item)), unit: item.unit_code || '' }) : t('cartPage.removeItem')"
+                                :icon="getQuantityLimit(item) > 0 ? 'pi pi-pencil' : 'pi pi-trash'" size="small" outlined :disabled="savingQty" @click="adjustItemToAvailableStock(item)" />
+                        </div>
+                        <div v-else-if="stockBreakdown(item)?.preorderQty > 0" class="cart-preorder-action">
+                            <div class="cart-preorder-pills">
+                                <span>{{ t('cartPage.stockReadyQty', { qty: formatStockQty(stockBreakdown(item).readyQty), unit: item.unit_code || '' }) }}</span>
+                                <span>{{ t('cartPage.stockPreorderQty', { qty: formatStockQty(stockBreakdown(item).preorderQty), unit: item.unit_code || '' }) }}</span>
+                            </div>
+                            <small>{{ t('cartPage.stockPreorderHint') }}</small>
+                        </div>
+                        <div v-else-if="draftExceedsLimit(item)" class="cart-limit-action" role="status">
+                            <i class="pi pi-info-circle" aria-hidden="true"></i>
+                            <span>{{ quantityLimitText(item) }}</span>
+                        </div>
+                        <div v-else-if="isStockUnknown(item)" class="cart-limit-action" role="status">
                             <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-                            <span>{{ getStockBlockMessage(item) }}</span>
-                            <Button v-if="isExceedingStock(item)" :label="t('cartPage.adjustToStock')" icon="pi pi-check" size="small" outlined @click="adjustItemToAvailableStock(item)" />
-                            <Button v-else :label="t('cartPage.removeItem')" icon="pi pi-trash" size="small" outlined @click="confirmRemoveItem(item)" />
+                            <span>{{ t('cartPage.stockCheckFailedDetail') }}</span>
+                            <Button :label="t('cartPage.refreshStock')" icon="pi pi-refresh" text size="small" @click="emit('refresh-cart')" />
                         </div>
                 <!-- รายการสินค้าย่อย (expandable) -->
                 <div v-if="isSetItem(item) && isExpanded(item.item_code)" class="ml-8 mt-2 space-y-2 border-l-2 border-primary-200 pl-4 mb-4">
@@ -778,7 +835,7 @@ useCheckoutFooter(checkoutFooter);
                 <p v-if="checkoutBlockMessage" class="mobile-cart-warning">{{ checkoutBlockMessage }}</p>
             </section>
 
-            <aside ref="checkoutFooter" class="cart-summary-card mobile-checkout-footer">
+            <aside ref="checkoutFooter" class="cart-summary-card mobile-checkout-footer" :class="{ 'cart-summary-card--needs-fix': hasVisibleStockIssues }">
                 <div class="cart-sum checkout-total"><small>{{ t('common.total') }}</small><strong>฿{{ formatNumber(totalAmount) }}</strong></div>
                 <div class="cart-summary-count">{{ t('cartPage.summaryLine', { lines: totalLines, items: totalItems }) }}</div>
                 <div v-if="checkoutBlockMessage" class="cart-summary-warning">
@@ -787,13 +844,13 @@ useCheckoutFooter(checkoutFooter);
                 </div>
                 <div v-else-if="preorderLineCount > 0" class="cart-summary-preorder">
                     <i class="pi pi-clock"></i>
-                    <span>{{ t('cartPage.preorderSummaryLine', { count: preorderLineCount }) }}</span>
+                    <span>{{ t('cartPage.stockPreorderSummary', { count: preorderLineCount }) }}</span>
                 </div>
                 <Button
                     :label="checkoutButtonLabel"
                     icon="pi pi-shopping-cart"
                     iconPos="right"
-                    @click="proceedToCheckout"
+                    @click="handlePrimaryAction"
                     :loading="isValidatingStock"
                     :disabled="isCheckoutDisabled"
                     class="footer-checkout-btn cart-summary-checkout checkout-primary"
@@ -911,7 +968,8 @@ useCheckoutFooter(checkoutFooter);
 .cart-column-head > :nth-child(6), .cart-subtotal { text-align: end; }
 .cart-line + .cart-line { border-top: 1px solid var(--line); }
 .cart-line:last-child { border-radius: 0 0 .85rem .85rem; }
-.cart-line--issue, .cart-stock-alert { background: #fff7e8; }
+.cart-line--issue { background:#fffafa; }
+.cart-stock-alert { background:#fff7e8; }
 .cart-product { min-width: 0; overflow-wrap: anywhere; }
 .cart-product img { width: 3rem; height: 3rem; flex: none; object-fit: contain; }
 .cart-product small, .cart-product strong { display: block; }
@@ -922,11 +980,20 @@ useCheckoutFooter(checkoutFooter);
 .cart-stock-badge { line-height: 1.4; }
 .cart-stock-badge--ok { color: #087247; }
 .cart-stock-badge--preorder, .cart-summary-preorder { color: #514892; }
-.cart-stock-badge--warn, .cart-stock-badge--out, .cart-summary-warning { color: #92480d; }
-.cart-stock-alert, .cart-issue-action { flex-wrap: wrap; color: #794113; }
+.cart-stock-badge--warn, .cart-stock-badge--out, .cart-summary-warning, .mobile-cart-warning { color:#b52f21; }
+.cart-stock-alert, .cart-issue-action { flex-wrap: wrap; color:#b52f21; }
 .cart-stock-alert { justify-content: space-between; border: 1px solid #e9c38c; padding: .5rem .8rem; border-radius: .65rem; }
 .cart-stock-alert > div { flex-wrap: wrap; }
-.cart-issue-action { padding: .45rem .8rem; background: #fff0d6; border-inline-start: 3px solid #ce811d; }
+.cart-issue-action { justify-content:space-between; padding:.7rem .85rem; background:#fff1ed; border:1px solid #f3d2c9; color:#9e3828; gap:.75rem; }
+.cart-issue-copy { display:grid; gap:.18rem; min-width:0; line-height:1.4; }
+.cart-issue-copy small { color:#865c54; }
+.cart-issue-action :deep(.p-button) { flex:none; color:#9e3828; border-color:#e9a995; }
+.cart-preorder-action { padding:.65rem .8rem; background:#fff8e9; border:1px solid #f0dfb9; color:#875c12; }
+.cart-preorder-pills { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:.25rem; }
+.cart-preorder-pills span { padding:.2rem .55rem; border-radius:999px; background:#fff0cf; font-size:.83rem; font-weight:700; }
+.cart-preorder-pills span:first-child { background:#e5f5ee; color:#0a5948; }
+.cart-preorder-action small { font-size:.78rem; }
+.cart-limit-action { display:flex; align-items:center; gap:.45rem; padding:.48rem .8rem; background:#fff1ed; border:1px solid #f3d2c9; border-radius:.65rem; color:#b52f21; font-size:.83rem; font-weight:700; }
 .cart-item-qty-row { display: inline-flex; align-items: center; justify-self: start; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; }
 .cart-item-qty-row :deep(.p-button) { width: 2.1rem; height: 2.25rem; padding: 0; color: var(--green); }
 .qty-input { width: 2.5rem; min-width: 0; text-align: center; color: inherit; background: transparent; }
@@ -947,7 +1014,7 @@ useCheckoutFooter(checkoutFooter);
     .cart-items-panel { border: 0; background: transparent; }
     .cart-items-stack { display: grid; gap: .55rem; }
     .cart-items-stack .cart-line { border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }
-    .cart-items-stack .cart-line--issue { background: #fff7e8; border-color: #e9c38c; }
+    .cart-items-stack .cart-line--issue { background:#fffafa; border-color:#f3d2c9; }
     .cart-row { grid-template-columns: minmax(0, 1fr) auto 2.3rem; grid-template-areas: "product product remove" "price stock stock" "qty total total"; gap: .3rem .55rem; }
     .cart-product { grid-area: product; }
     .cart-unit { display: none; }
@@ -958,6 +1025,8 @@ useCheckoutFooter(checkoutFooter);
     .cart-subtotal { grid-area: total; }
     .cart-remove { grid-area: remove; }
     .cart-issue-action { border-radius: 0 0 .75rem .75rem; }
+    .cart-issue-action :deep(.p-button) { max-width:100%; }
+    .cart-preorder-action { border-radius:0 0 .75rem .75rem; }
     .cart-summary-card {
         top: auto; bottom: 0; z-index: 4;
         grid-template-columns: minmax(0,1fr) auto; align-items: center;
@@ -966,6 +1035,7 @@ useCheckoutFooter(checkoutFooter);
     }
     .cart-sum { grid-column: 1; grid-row: 1; }
     .cart-summary-checkout { grid-column: 2; grid-row: 1; }
+    .cart-summary-card--needs-fix .cart-summary-checkout { grid-column:1 / -1; grid-row:auto; width:100%; }
     .cart-summary-count { display: none; }
     .cart-summary-warning, .cart-summary-preorder, .cart-page-number { grid-column: 1 / -1; }
     .cart-summary-back { grid-column: 1 / -1; justify-self: center; min-height: 2rem; padding: .2rem .6rem; }
@@ -983,6 +1053,8 @@ useCheckoutFooter(checkoutFooter);
     .cart-summary-warning, .cart-summary-preorder { overflow-wrap: anywhere; }
 }
 @media (max-width: 640px) {
+    .cart-issue-action { align-items:stretch; flex-direction:column; }
+    .cart-issue-action :deep(.p-button) { justify-content:center; }
     .cart-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem; margin-bottom: .65rem; }
     .cart-title { grid-column: 1 / -1; }
     .cart-search { width: 100%; max-width: none; }

@@ -584,6 +584,19 @@ components:
         send_type:
           type: string
           default: "0"
+        pickup_date:
+          type: string
+          format: date
+          description: Required for pickup; YYYY-MM-DD from pickup-availability
+        pickup_time_slot:
+          type: string
+          description: Required for pickup; selected HH:mm-HH:mm slot
+        pickup_receiver:
+          type: string
+          description: Required for pickup
+        pickup_phone:
+          type: string
+          description: Required for pickup; receiver phone number
         total_after_vat:
           type: string
           description: Client total hint; server calculates totals using validated lines and VAT options
@@ -1729,6 +1742,27 @@ paths:
 
   # ─── ORDER ───────────────────────────────────────────────────────────────────
 
+  /sales-settings/pickup-availability:
+    get:
+      tags: [Order]
+      summary: Available pickup dates and slots in Asia/Bangkok time
+      responses:
+        '200':
+          description: Available pickup dates and slots; Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        slots: { type: array, items: { type: string } }
+
   /sendorder:
     post:
       tags: [Order]
@@ -1766,10 +1800,10 @@ paths:
                   is_preorder: { type: boolean, enum: [false] }
                   duplicate: { type: boolean }
         '400':
-          description: Error (plain text)
+          description: Invalid pickup contact or unavailable pickup slot, among other validation errors
           content:
-            text/plain:
-              schema: { type: string }
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /admin/pending-orders:
     get:

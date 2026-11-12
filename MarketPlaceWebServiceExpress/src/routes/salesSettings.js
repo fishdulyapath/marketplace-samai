@@ -4,10 +4,12 @@ const router = express.Router();
 const { query, withTransaction } = require('../db');
 const { hasOwn } = require('../utils/partialUpdate');
 const { escapeLike } = require('../utils/likePattern');
+const { availableDays } = require('../utils/pickupSchedule');
 const {
   cleanFeatureType,
   ensureSalesSettingsTables,
   getSalesSettings,
+  getPickupSchedule,
   isValidStarThresholds,
   normalizePreorderMode,
   normalizeProductNameMode,
@@ -24,6 +26,7 @@ const {
   setErpMaxLinesPerDoc,
   setOrderDocPattern,
   setOrderDocSource,
+  setPickupSchedule,
 } = require('../utils/marketplaceSalesSettings');
 
 function cleanItemCode(value) {
@@ -106,11 +109,21 @@ function isValidSalesDisplayModeInput(value) {
   return ['0', '1', '2'].includes(normalizeSalesDisplayMode(value, ''));
 }
 
+router.get('/sales-settings/pickup-availability', async (req, res) => {
+  try {
+    const schedule = await getPickupSchedule();
+    return res.set('Cache-Control', 'no-store').json({ success: true, data: availableDays(schedule) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/sales-settings', async (req, res) => {
   try {
     await ensureSalesSettingsTables();
     const includeFeatured = String(req.query?.include_featured ?? '1') !== '0';
-    const settings = await getSalesSettings();
+    const [general, pickup_schedule] = await Promise.all([getSalesSettings(), getPickupSchedule()]);
+    const settings = { ...general, pickup_schedule };
     if (!includeFeatured) {
       return res.json({ success: true, data: settings });
     }
@@ -159,6 +172,10 @@ router.post('/sales-settings', requireAdmin('admin.salesSettings'), async (req, 
   try {
     await ensureSalesSettingsTables();
     const result = await withTransaction(async (client) => {
+      let pickupSchedule;
+      if (req.body?.pickup_schedule !== undefined) {
+        pickupSchedule = await setPickupSchedule(req.body.pickup_schedule, client);
+      }
       let stockPercent;
       let docHistoryMode;
       let preorderDefaultEnabled;
@@ -195,7 +212,7 @@ router.post('/sales-settings', requireAdmin('admin.salesSettings'), async (req, 
       }
       return {
         stockPercent, docHistoryMode, preorderDefaultEnabled, productNameDisplayMode, salesDisplayMode,
-        salesStarThresholds, salePremiumEnabled, orderDocSource, orderDocPattern, cancelDocPattern, erpMaxLinesPerDoc,
+        salesStarThresholds, salePremiumEnabled, orderDocSource, orderDocPattern, cancelDocPattern, erpMaxLinesPerDoc, pickupSchedule,
       };
     });
     return res.json({
@@ -212,6 +229,7 @@ router.post('/sales-settings', requireAdmin('admin.salesSettings'), async (req, 
         ...(result.orderDocPattern !== undefined ? { order_doc_pattern: result.orderDocPattern } : {}),
         ...(result.cancelDocPattern !== undefined ? { cancel_doc_pattern: result.cancelDocPattern } : {}),
         ...(result.erpMaxLinesPerDoc !== undefined ? { erp_max_lines_per_doc: result.erpMaxLinesPerDoc } : {}),
+        ...(result.pickupSchedule !== undefined ? { pickup_schedule: result.pickupSchedule } : {}),
       },
     });
   } catch (error) {

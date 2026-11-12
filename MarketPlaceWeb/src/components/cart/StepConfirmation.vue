@@ -10,13 +10,13 @@ import DocHistoryService from '@/services/DocHistoryService';
 import EmployeeService from '@/services/EmployeeService';
 import ErpOptionService from '@/services/ErpOptionService';
 import ProductService from '@/services/ProductService';
+import SalesSettingsService from '@/services/SalesSettingsService';
 import { useCartStore } from '@/stores/cartStore';
 import { useLanguageStore } from '@/stores/languageStore';
 import { getCheckoutFormIssue } from '@/utils/checkoutReadiness';
 import { isSalePremiumItem } from '@/utils/itemType';
 import { pickProductName, withProductDisplay } from '@/utils/languageDisplay';
 import { getPreorderSplit, splitItemsForPreorder, toOrderQty } from '@/utils/preorderSplit';
-import { getAvailablePickupSlots, getPickupDateRange } from '@/utils/pickupSlots';
 import MultiSelect from 'primevue/multiselect';
 import ProgressSpinner from 'primevue/progressspinner';
 import Tag from 'primevue/tag';
@@ -450,13 +450,36 @@ const formData = ref({
 });
 
 // ── รับเอง (รีวิว 260908 สไลด์ 6) ──────────────────────────────────────
-const pickupDate = ref(new Date());
+const pickupDate = ref('');
 const pickupTimeSlot = ref('');
 const pickupReceiver = ref('');
-const pickupVehicle = ref('');
+const pickupPhone = ref('');
+const pickupDays = ref([]);
+const pickupAvailabilityState = ref('loading');
+let pickupAvailabilityRequest = 0;
+const pickupDateOptions = computed(() => pickupDays.value.map((day) => ({ value: day.date, label: day.date.split('-').reverse().join('/') })));
+const pickupSlots = computed(() => (pickupDays.value.find((day) => day.date === pickupDate.value)?.slots || []).map((slot) => ({ value: slot, label: slot })));
 
-const pickupDateRange = computed(() => getPickupDateRange());
-const pickupSlots = computed(() => getAvailablePickupSlots(pickupDate.value));
+async function refreshPickupAvailability() {
+    const request = ++pickupAvailabilityRequest;
+    pickupAvailabilityState.value = 'loading';
+    try {
+        const days = await SalesSettingsService.getPickupAvailability();
+        if (request !== pickupAvailabilityRequest) return;
+        pickupDays.value = days;
+        if (!days.some((day) => day.date === pickupDate.value)) pickupDate.value = '';
+        pickupAvailabilityState.value = 'ready';
+    } catch {
+        if (request === pickupAvailabilityRequest) pickupAvailabilityState.value = 'error';
+    }
+}
+
+watch(() => formData.value.deliveryMethod, (method, _, onCleanup) => {
+    if (method !== 'pickup') return;
+    refreshPickupAvailability();
+    const timer = window.setInterval(refreshPickupAvailability, 60000);
+    onCleanup(() => { ++pickupAvailabilityRequest; window.clearInterval(timer); });
+}, { immediate: true });
 
 // เปลี่ยนวันแล้ว slot ที่เลือกไว้อาจใช้ไม่ได้ (เช่นเลือกเช้าของวันนี้ไว้แล้วย้อนกลับมาวันนี้)
 // ต้องล้างทิ้ง ไม่งั้นจะส่ง slot ที่เกินเวลาไปให้ ERP
@@ -464,7 +487,7 @@ watch(pickupSlots, (slots) => {
     if (pickupTimeSlot.value && !slots.some((slot) => slot.value === pickupTimeSlot.value)) {
         pickupTimeSlot.value = '';
     }
-});
+}, { flush: 'sync' });
 
 const checkoutFormIssue = computed(() =>
     getCheckoutFormIssue({
@@ -476,17 +499,29 @@ const checkoutFormIssue = computed(() =>
         pickupDate: pickupDate.value,
         pickupTimeSlot: pickupTimeSlot.value,
         pickupReceiver: pickupReceiver.value,
-        pickupVehicle: pickupVehicle.value
+        pickupPhone: pickupPhone.value
     })
 );
-const checkoutFormBlockMessage = computed(() => (checkoutFormIssue.value ? t(`reviewOrder.${checkoutFormIssue.value}`) : ''));
-const canSubmitOrder = computed(() => priceAndStockReady.value && !checkoutFormIssue.value && !(formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value));
+const pickupAvailabilityIssue = computed(() => {
+    if (formData.value.deliveryMethod !== 'pickup') return '';
+    if (pickupAvailabilityState.value === 'loading') return 'pickupLoading';
+    if (pickupAvailabilityState.value === 'error') return 'pickupLoadError';
+    if (!pickupDays.value.length) return 'pickupNoSlots';
+    if (pickupDate.value && !pickupDays.value.some((day) => day.date === pickupDate.value)) return 'requirePickupDate';
+    if (pickupTimeSlot.value && !pickupSlots.value.some((slot) => slot.value === pickupTimeSlot.value)) return 'requirePickupTimeSlot';
+    return '';
+});
+const checkoutFormBlockMessage = computed(() => {
+    const issue = pickupAvailabilityIssue.value || checkoutFormIssue.value;
+    return issue ? t(`reviewOrder.${issue}`) : '';
+});
+const canSubmitOrder = computed(() => priceAndStockReady.value && !checkoutFormIssue.value && !pickupAvailabilityIssue.value && !(formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value));
 const checkoutBlockMessage = computed(() => priceBlockMessage.value || preorderBlockMessage.value || (formData.value.deliveryMethod === 'delivery' && deliveryAddressLoading.value ? 'กำลังดึงข้อมูลที่อยู่ลูกค้า' : checkoutFormBlockMessage.value));
 
-// ข้อความ "กรุณาเลือกวัน/เวลา/ผู้รับ/ทะเบียน" ต้องอยู่ติดกล่องที่ต้องแก้
+// ข้อความ "กรุณาเลือกวัน/เวลา/ผู้รับ/เบอร์โทร" ต้องอยู่ติดกล่องที่ต้องแก้
 // ไม่ใช่ไปกองรวมล่างสุดของหน้า ซึ่งอยู่ไกลจากช่องที่ยังไม่ได้กรอก
-const PICKUP_ISSUE_KEYS = ['requirePickupDate', 'requirePickupTimeSlot', 'requirePickupReceiver', 'requirePickupVehicle'];
-const pickupBlockMessage = computed(() => (PICKUP_ISSUE_KEYS.includes(checkoutFormIssue.value) ? checkoutFormBlockMessage.value : ''));
+const PICKUP_ISSUE_KEYS = ['requirePickupDate', 'requirePickupTimeSlot', 'requirePickupReceiver', 'requirePickupPhone'];
+const pickupBlockMessage = computed(() => (pickupAvailabilityIssue.value || PICKUP_ISSUE_KEYS.includes(checkoutFormIssue.value) ? checkoutFormBlockMessage.value : ''));
 
 const deliveryMethodLabel = computed(() => (formData.value.deliveryMethod === 'delivery' ? t('reviewOrder.deliveryCustomer') : t('reviewOrder.pickupSelf')));
 const selectedCustomerDisplay = computed(() => {
@@ -498,7 +533,7 @@ const deliveryContactDisplay = computed(() => {
         const tel = formData.value.deliveryTelephone;
         return tel || '-';
     }
-    return props.userData?.telephone || '-';
+    return pickupPhone.value || '-';
 });
 const deliveryAddressDisplay = computed(() => {
     if (formData.value.deliveryMethod !== 'delivery') return t('reviewOrder.pickupAtStore');
@@ -1219,6 +1254,7 @@ function markCheckoutBlockMeta() {
 function setCheckoutError(error, fallbackMessage = '') {
     checkoutErrorMeta.value = checkoutErrorMetaFrom(error);
     errorMessage.value = checkoutErrorMessage(error) || fallbackMessage || t('reviewOrder.checkoutFailedRetry');
+    if (checkoutErrorMeta.value.code === 'PICKUP_SLOT_UNAVAILABLE') refreshPickupAvailability();
 }
 
 async function proceedCheckout() {
@@ -1237,13 +1273,6 @@ async function proceedCheckout() {
             formData.value.address = formData.value.deliveryAddress;
             formData.value.address_name = '';
         }
-
-        // dd/mm/yyyy สำหรับข้อความที่คนอ่าน
-        const formatPickupDate = (date) => {
-            if (!date) return '';
-            const d = new Date(date);
-            return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        };
 
         // YYYY-MM-DD
         const formatDate = (date) => {
@@ -1265,14 +1294,11 @@ async function proceedCheckout() {
             telephone: formData.value.telephone,
             send_date: formatDate(sendDate.value),
             send_day: sendDay.value,
-            // ข้อมูลรับเอง — backend เอาไปต่อท้ายหมายเหตุของ QT
-            // (รีวิว 260908 สไลด์ 6: "ข้อมูลจะอยู่ที่ หมายเหตุ ขอ QT")
-            // ส่งเป็น dd/mm/yyyy ให้ตรงกับที่ผู้ใช้เห็นในช่องเลือกวัน — ข้อความนี้ไปโผล่
-            // ในหมายเหตุของ QT ซึ่งพนักงาน ERP เป็นคนอ่าน ไม่ใช่เครื่องอ่าน
-            pickup_date: formData.value.deliveryMethod === 'pickup' ? formatPickupDate(pickupDate.value) : '',
+            // ส่งวันที่แบบ ISO ให้ server ตรวจรอบรับ แล้ว server ใส่ข้อความอ่านง่ายในหมายเหตุ MPR
+            pickup_date: formData.value.deliveryMethod === 'pickup' ? pickupDate.value : '',
             pickup_time_slot: formData.value.deliveryMethod === 'pickup' ? pickupTimeSlot.value : '',
             pickup_receiver: formData.value.deliveryMethod === 'pickup' ? pickupReceiver.value.trim() : '',
-            pickup_vehicle: formData.value.deliveryMethod === 'pickup' ? pickupVehicle.value.trim() : '',
+            pickup_phone: formData.value.deliveryMethod === 'pickup' ? pickupPhone.value.trim() : '',
             credit_day: creditData.value.credit_day,
             credit_date: creditData.value.credit_date,
             // tax_type, item_type  sub_item ( allConfirmedItems )
@@ -1875,15 +1901,16 @@ useCheckoutFooter(checkoutFooter);
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label :for="'pickup-date-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupDate') }} <span class="text-red-500">*</span></label>
-                                        <DatePicker
+                                        <Select
                                             :inputId="'pickup-date-cus'"
                                             v-model="pickupDate"
-                                            dateFormat="dd/mm/yy"
-                                            :minDate="pickupDateRange.min"
-                                            :maxDate="pickupDateRange.max"
+                                            :options="pickupDateOptions"
+                                            optionLabel="label"
+                                            optionValue="value"
+                                            :placeholder="t('reviewOrder.requirePickupDate')"
+                                            :disabled="pickupAvailabilityState !== 'ready' || !pickupDateOptions.length"
                                             class="w-full"
                                         />
-                                        <small class="text-color-secondary">{{ t('reviewOrder.pickupDateHint') }}</small>
                                     </div>
                                     <div>
                                         <label :for="'pickup-slot-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupTimeSlot') }} <span class="text-red-500">*</span></label>
@@ -1894,27 +1921,28 @@ useCheckoutFooter(checkoutFooter);
                                             optionLabel="label"
                                             optionValue="value"
                                             :placeholder="t('reviewOrder.pickupTimeSlotPlaceholder')"
-                                            :disabled="pickupSlots.length === 0"
+                                            :disabled="pickupAvailabilityState !== 'ready' || pickupSlots.length === 0"
                                             class="w-full"
                                         />
-                                        <small v-if="pickupSlots.length === 0" class="text-red-500">{{ t('reviewOrder.pickupTimeSlotEmpty') }}</small>
-                                        <small v-else class="text-color-secondary">{{ t('reviewOrder.pickupTimeSlotHint') }}</small>
+                                        <small v-if="pickupAvailabilityState === 'ready' && pickupDate && pickupSlots.length === 0" class="text-red-500">{{ t('reviewOrder.pickupTimeSlotEmpty') }}</small>
                                     </div>
                                 </div>
 
-                                <div>
-                                    <label :for="'pickup-receiver-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupReceiver') }} <span class="text-red-500">*</span></label>
-                                    <InputText :id="'pickup-receiver-cus'" v-model="pickupReceiver" class="w-full" :placeholder="t('reviewOrder.pickupReceiverPlaceholder')" />
-                                </div>
-
-                                <div>
-                                    <label :for="'pickup-vehicle-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupVehicle') }} <span class="text-red-500">*</span></label>
-                                    <InputText :id="'pickup-vehicle-cus'" v-model="pickupVehicle" class="w-full" :placeholder="t('reviewOrder.pickupVehiclePlaceholder')" />
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label :for="'pickup-receiver-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupReceiver') }} <span class="text-red-500">*</span></label>
+                                        <InputText :id="'pickup-receiver-cus'" v-model="pickupReceiver" autocomplete="name" maxlength="80" class="w-full" :placeholder="t('reviewOrder.pickupReceiverPlaceholder')" />
+                                    </div>
+                                    <div>
+                                        <label :for="'pickup-phone-cus'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupPhone') }} <span class="text-red-500">*</span></label>
+                                        <InputText :id="'pickup-phone-cus'" v-model="pickupPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" class="w-full" :placeholder="t('reviewOrder.pickupPhonePlaceholder')" />
+                                    </div>
                                 </div>
                             </div>
 
                             <!-- บอกช่องที่ยังไม่ได้กรอกตรงนี้ ไม่ใช่ล่างสุดของหน้า -->
                             <Message v-if="pickupBlockMessage" severity="warn" :closable="false" class="mt-2">{{ pickupBlockMessage }}</Message>
+                            <Button v-if="pickupAvailabilityState === 'error'" type="button" text size="small" :label="t('reviewOrder.pickupRetry')" @click="refreshPickupAvailability" />
                         </div>
 
                         <!-- ข้อมูลรับสินค้าอยู่ถัดจากวิธีรับ ก่อนตัวเลือกพนักงานเสริม -->
@@ -2049,15 +2077,16 @@ useCheckoutFooter(checkoutFooter);
                                 <div class="grid grid-cols-2 gap-3">
                                     <div>
                                         <label :for="'pickup-date-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupDate') }} <span class="text-red-500">*</span></label>
-                                        <DatePicker
+                                        <Select
                                             :inputId="'pickup-date-emp'"
                                             v-model="pickupDate"
-                                            dateFormat="dd/mm/yy"
-                                            :minDate="pickupDateRange.min"
-                                            :maxDate="pickupDateRange.max"
+                                            :options="pickupDateOptions"
+                                            optionLabel="label"
+                                            optionValue="value"
+                                            :placeholder="t('reviewOrder.requirePickupDate')"
+                                            :disabled="pickupAvailabilityState !== 'ready' || !pickupDateOptions.length"
                                             class="w-full"
                                         />
-                                        <small class="text-color-secondary">{{ t('reviewOrder.pickupDateHint') }}</small>
                                     </div>
                                     <div>
                                         <label :for="'pickup-slot-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupTimeSlot') }} <span class="text-red-500">*</span></label>
@@ -2068,27 +2097,28 @@ useCheckoutFooter(checkoutFooter);
                                             optionLabel="label"
                                             optionValue="value"
                                             :placeholder="t('reviewOrder.pickupTimeSlotPlaceholder')"
-                                            :disabled="pickupSlots.length === 0"
+                                            :disabled="pickupAvailabilityState !== 'ready' || pickupSlots.length === 0"
                                             class="w-full"
                                         />
-                                        <small v-if="pickupSlots.length === 0" class="text-red-500">{{ t('reviewOrder.pickupTimeSlotEmpty') }}</small>
-                                        <small v-else class="text-color-secondary">{{ t('reviewOrder.pickupTimeSlotHint') }}</small>
+                                        <small v-if="pickupAvailabilityState === 'ready' && pickupDate && pickupSlots.length === 0" class="text-red-500">{{ t('reviewOrder.pickupTimeSlotEmpty') }}</small>
                                     </div>
                                 </div>
 
-                                <div>
-                                    <label :for="'pickup-receiver-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupReceiver') }} <span class="text-red-500">*</span></label>
-                                    <InputText :id="'pickup-receiver-emp'" v-model="pickupReceiver" class="w-full" :placeholder="t('reviewOrder.pickupReceiverPlaceholder')" />
-                                </div>
-
-                                <div>
-                                    <label :for="'pickup-vehicle-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupVehicle') }} <span class="text-red-500">*</span></label>
-                                    <InputText :id="'pickup-vehicle-emp'" v-model="pickupVehicle" class="w-full" :placeholder="t('reviewOrder.pickupVehiclePlaceholder')" />
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label :for="'pickup-receiver-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupReceiver') }} <span class="text-red-500">*</span></label>
+                                        <InputText :id="'pickup-receiver-emp'" v-model="pickupReceiver" autocomplete="name" maxlength="80" class="w-full" :placeholder="t('reviewOrder.pickupReceiverPlaceholder')" />
+                                    </div>
+                                    <div>
+                                        <label :for="'pickup-phone-emp'" class="block text-sm font-medium mb-1">{{ t('reviewOrder.pickupPhone') }} <span class="text-red-500">*</span></label>
+                                        <InputText :id="'pickup-phone-emp'" v-model="pickupPhone" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" class="w-full" :placeholder="t('reviewOrder.pickupPhonePlaceholder')" />
+                                    </div>
                                 </div>
                             </div>
 
                             <!-- บอกช่องที่ยังไม่ได้กรอกตรงนี้ ไม่ใช่ล่างสุดของหน้า -->
                             <Message v-if="pickupBlockMessage" severity="warn" :closable="false" class="mt-2">{{ pickupBlockMessage }}</Message>
+                            <Button v-if="pickupAvailabilityState === 'error'" type="button" text size="small" :label="t('reviewOrder.pickupRetry')" @click="refreshPickupAvailability" />
                         </div>
 
                         <!-- <Select

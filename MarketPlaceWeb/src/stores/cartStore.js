@@ -758,7 +758,7 @@ export const useCartStore = defineStore('cart', () => {
                 pickup_date: checkoutData.pickup_date || '',
                 pickup_time_slot: checkoutData.pickup_time_slot || '',
                 pickup_receiver: checkoutData.pickup_receiver || '',
-                pickup_vehicle: checkoutData.pickup_vehicle || '',
+                pickup_phone: checkoutData.pickup_phone || '',
                 credit_day: checkoutData.credit_day || null,
                 credit_date: checkoutData.credit_date || null
             };
@@ -918,6 +918,7 @@ export const useCartStore = defineStore('cart', () => {
             qty: toOrderQty(item.qty || item.quantity),
             price: toCartNumber(item.price, 0),
             unit_code: item.unit_code || item.unit || 'ชิ้น',
+            unit_standard: item.unit_standard || '',
             // คัดลอกคุณสมบัติอื่นๆ ที่จำเป็นสำหรับการแสดงผล
             barcode: item.barcode || '',
             wh_code: item.wh_code || '',
@@ -928,6 +929,7 @@ export const useCartStore = defineStore('cart', () => {
             item_type: item.item_type || '0',
             tax_type: item.tax_type || '0',
             balance_qty: item.balance_qty,
+            base_balance_qty: item.base_balance_qty,
             preorder_allowed: item.preorder_allowed ?? 0,
             preorder_mode: item.preorder_mode || 'default',
             sold_out: item.sold_out ?? '0',

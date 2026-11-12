@@ -127,7 +127,7 @@ const router = createRouter({
                     }
                 },
                 {
-                    path: 'admin/pending-orders',
+                    path: 'admin/pending-orders/:docNo?',
                     name: 'admin-pending-orders',
                     component: () => import('@/views/pages/admin/AdminPendingOrders.vue'),
                     meta: { requiresAuth: true, requiresEmployee: true, adminPermission: 'admin.orders', title: 'รอดำเนินการ' }

@@ -914,6 +914,9 @@ router.get('/validatecartstock', async (req, res) => {
       c.guid_code,
       c.preorder_mode,
       c.max_allowance_csv,
+      COALESCE(NULLIF(u.ratio, 0), 1) AS unit_ratio,
+      CASE WHEN c.item_type = 3 THEN COALESCE(ss.balance_qty, 0)
+           ELSE TRUNC(COALESCE(ns.balance_qty, 0) * $3 / 100) END AS stock_base_qty,
       CASE
         WHEN c.item_type = 3 THEN COALESCE(ss.balance_qty, 0)
         ELSE COALESCE(TRUNC((COALESCE(ns.balance_qty, 0) * $3 / 100) / COALESCE(NULLIF(u.ratio, 0), 1)), 0)
@@ -935,6 +938,13 @@ router.get('/validatecartstock', async (req, res) => {
     const result = await query(sql, [custCode, whCode, stockDisplayPercent]);
     const stockIssues = [];
     let isValid = true;
+    const totalBaseByProduct = new Map();
+    for (const row of result.rows) {
+      if (String(row.store_item_type) === '4' || Number(row.item_type) === 3) continue;
+      const key = JSON.stringify([row.item_code, row.wh_code]);
+      totalBaseByProduct.set(key, (totalBaseByProduct.get(key) || 0)
+        + toInt(row.qty_in_cart, 0) * toNumber(row.unit_ratio, 1));
+    }
 
     for (const r of result.rows) {
       // โปรโมชันของแถม (item_type=4) — ตรวจว่ายังไม่หมดอายุ ก่อนปล่อยไปหน้ายืนยัน (REQ5)
@@ -1027,6 +1037,12 @@ router.get('/validatecartstock', async (req, res) => {
       const qtyInCart = toInt(r.qty_in_cart, 0);
       const balanceQty = toInt(r.balance_qty, 0);
       const preorderAllowed = resolvePreorderAllowed(r.preorder_mode, preorderDefaultEnabled);
+      const groupKey = JSON.stringify([r.item_code, r.wh_code]);
+      const ratio = toNumber(r.unit_ratio, 1);
+      const totalBase = totalBaseByProduct.get(groupKey) || 0;
+      const availableBase = toNumber(r.stock_base_qty, 0);
+      const otherBase = totalBase - qtyInCart * ratio;
+      const sharedBalanceQty = Math.max(0, Math.floor((availableBase - otherBase + 1e-9) / ratio));
 
       // เกินจำนวนสั่งสูงสุดต่อคำสั่งซื้อ (REQ3) — ตรวจที่ตะกร้าด้วย ไม่ใช่รอให้ /sendorder ปฏิเสธ
       // ลูกค้าที่เพิ่มของเกินลิมิตทางอื่น (แก้จำนวนในตะกร้า, ยิง API ตรง) จะเห็นตั้งแต่ตรงนี้
@@ -1049,16 +1065,17 @@ router.get('/validatecartstock', async (req, res) => {
         continue;
       }
 
-      if ((balanceQty <= 0 || qtyInCart > balanceQty) && !preorderAllowed) {
+      if ((balanceQty <= 0 || qtyInCart > balanceQty || (Number(r.item_type) !== 3 && totalBase > availableBase)) && !preorderAllowed) {
+        const remainingQty = Number(r.item_type) === 3 ? balanceQty : Math.min(balanceQty, sharedBalanceQty);
         stockIssues.push({
           item_code: r.item_code,
           item_name: r.item_name,
           unit_code: r.unit_code,
           wh_code: r.wh_code,
           qty_in_cart: qtyInCart,
-          balance_qty: balanceQty,
-          shortage_qty: Math.max(0, qtyInCart - balanceQty),
-          issue_type: balanceQty <= 0 ? 'out_of_stock' : 'exceeding',
+          balance_qty: remainingQty,
+          shortage_qty: Math.max(0, qtyInCart - remainingQty),
+          issue_type: remainingQty <= 0 ? 'out_of_stock' : 'exceeding',
           preorder_allowed: preorderAllowed,
         });
         isValid = false;

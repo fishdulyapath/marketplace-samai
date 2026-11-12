@@ -136,7 +136,7 @@ onMounted(async () => {
                     <KeepAlive v-if="['cart', 'catalog'].includes(route.name)" include="Catalog" :max="1">
                         <component :is="Component" :key="route.path" />
                     </KeepAlive>
-                    <component v-else :is="Component" :key="route.path" />
+                    <component v-else :is="Component" :key="route.name === 'admin-pending-orders' ? route.name : route.path" />
                 </router-view>
             </div>
 

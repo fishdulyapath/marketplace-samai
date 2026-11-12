@@ -118,7 +118,8 @@ function normalizeLocalCartItem(item = {}) {
         id: item.id || item.guid_code,
         name: item.name || item.item_name,
         qty: toCartQty(item.qty || item.quantity),
-        price: toCartNumber(item.price)
+        price: toCartNumber(item.price),
+        balance_qty: isSalePremiumItem(item) ? item.balance_qty : undefined
     });
 }
 
@@ -138,13 +139,10 @@ async function waitForCartUpdateQueues() {
 function applyLocalCartItemSnapshot(item = {}) {
     const key = getCartUpdateKey(item);
     const index = localCartItems.value.findIndex(
-        (cartItem) => getCartUpdateKey(cartItem) === key || (item.guid_code && cartItem.guid_code === item.guid_code) || (item.id && cartItem.id === item.id)
+        (cartItem) => getCartUpdateKey(cartItem) === key
     );
     if (index === -1) return;
-    localCartItems.value[index] = normalizeLocalCartItem({
-        ...localCartItems.value[index],
-        ...item
-    });
+    localCartItems.value[index].qty = toCartQty(item.qty);
 }
 
 // Order data - shared between steps
@@ -410,17 +408,26 @@ async function fetchStockForItems(items) {
 
         // ดึง stock สำหรับสินค้าปกติ
         if (normalProducts.length > 0) {
-            const stockItems = normalProducts.map((item) => ({
-                item_code: item.item_code,
-                unit_code: item.unit_code
-            }));
+            const stockRequests = new Map();
+            for (const item of normalProducts) {
+                for (const unit_code of [item.unit_code, item.unit_standard].filter(Boolean)) {
+                    stockRequests.set(JSON.stringify([item.item_code, unit_code]), { item_code: item.item_code, unit_code });
+                }
+            }
 
-            const response = await CartService.getCartItemStock(stockItems);
-            if (response?.data?.success && response.data.data) {
+            const response = await CartService.getCartItemStock([...stockRequests.values()]);
+            if (response?.data?.success && Array.isArray(response.data.data)) {
+                const balances = new Map(response.data.data.map((row) => [JSON.stringify([row.item_code, row.unit_code]), row.balance_qty]));
                 for (const stockItem of response.data.data) {
                     updateItemBalanceQty(stockItem.item_code, stockItem.balance_qty, stockItem.unit_code);
                 }
-            }
+                for (const item of normalProducts) {
+                    const baseKey = JSON.stringify([item.item_code, item.unit_standard]);
+                    if (!item.unit_standard || !balances.has(baseKey)) continue;
+                    const index = localCartItems.value.findIndex((row) => row.item_code === item.item_code && row.unit_code === item.unit_code);
+                    if (index >= 0) localCartItems.value[index] = { ...localCartItems.value[index], base_balance_qty: balances.get(baseKey) };
+                }
+            } else throw new Error(t('cartPage.stockCheckFailedDetail'));
         }
 
         // ดึง stock สำหรับสินค้าชุด
@@ -432,10 +439,13 @@ async function fetchStockForItems(items) {
             const response = await ProductService.getProductSetByItemCode(item.item_code);
             if (response?.data && response.data.balance_qty !== undefined) {
                 updateItemBalanceQty(item.item_code, response.data.balance_qty);
-            }
+            } else throw new Error(t('cartPage.stockCheckFailedDetail'));
         }
     } catch (error) {
         console.error('Error fetching stock for items:', error);
+        const keys = new Set((items || []).filter((item) => !isSalePremiumItem(item)).map((item) => JSON.stringify([item.item_code, item.unit_code])));
+        localCartItems.value = localCartItems.value.map((item) => keys.has(JSON.stringify([item.item_code, item.unit_code]))
+            ? { ...item, balance_qty: undefined, base_balance_qty: undefined } : item);
     } finally {
         if (Array.isArray(items) && items.length > 0) {
             cartStore.syncWithApiData(localCartItems.value);
@@ -597,7 +607,7 @@ async function processCheckout(finalOrderData, done) {
             pickup_date: finalOrderData.pickup_date || '',
             pickup_time_slot: finalOrderData.pickup_time_slot || '',
             pickup_receiver: finalOrderData.pickup_receiver || '',
-            pickup_vehicle: finalOrderData.pickup_vehicle || '',
+            pickup_phone: finalOrderData.pickup_phone || '',
             credit_day: finalOrderData.credit_day || null,
             credit_date: finalOrderData.credit_date || null
         };

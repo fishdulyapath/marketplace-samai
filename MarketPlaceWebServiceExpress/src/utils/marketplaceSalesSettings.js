@@ -1,4 +1,5 @@
 const { query } = require('../db');
+const { defaultSchedule, normalizeSchedule } = require('./pickupSchedule');
 
 const SETTING_STOCK_PERCENT = 'stock_display_percent';
 const SETTING_PREORDER_DEFAULT_ENABLED = 'preorder_default_enabled';
@@ -217,6 +218,22 @@ async function setSettingValue(key, value, client = null) {
   );
 }
 
+async function getPickupSchedule(client = null) {
+  const raw = await getSettingValue('pickup_schedule', '', client);
+  if (!raw) return defaultSchedule();
+  try {
+    return normalizeSchedule(JSON.parse(raw));
+  } catch (error) {
+    throw new Error(`ตั้งค่ารอบรับสินค้าในฐานข้อมูลไม่ถูกต้อง: ${error.message}`);
+  }
+}
+
+async function setPickupSchedule(schedule, client = null) {
+  const normalized = normalizeSchedule(schedule);
+  await setSettingValue('pickup_schedule', JSON.stringify(normalized), client);
+  return normalized;
+}
+
 async function getStockDisplayPercent(client = null) {
   return clampPercent(await getSettingValue(SETTING_STOCK_PERCENT, '100', client));
 }
@@ -427,6 +444,8 @@ module.exports = {
   getPreorderDefaultEnabled,
   getProductNameDisplayMode,
   getSalesSettings,
+  getPickupSchedule,
+  setPickupSchedule,
   getSalesDisplayMode,
   getSalesStarThresholds,
   getSalePremiumEnabled,

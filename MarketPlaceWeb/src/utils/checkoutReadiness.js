@@ -12,7 +12,7 @@ export function getCheckoutFormIssue({
     pickupDate = null,
     pickupTimeSlot = '',
     pickupReceiver = '',
-    pickupVehicle = ''
+    pickupPhone = ''
 } = {}) {
     if (userType === 'employee' && !hasValue(customerCode)) {
         return 'selectCustomerBeforeConfirm';
@@ -30,7 +30,8 @@ export function getCheckoutFormIssue({
         if (!pickupDate) return 'requirePickupDate';
         if (!hasValue(pickupTimeSlot)) return 'requirePickupTimeSlot';
         if (!hasValue(pickupReceiver)) return 'requirePickupReceiver';
-        if (!hasValue(pickupVehicle)) return 'requirePickupVehicle';
+        const phone = String(pickupPhone || '').trim();
+        if (!/^\+?[\d ()-]+$/.test(phone) || !/^\d{7,15}$/.test(phone.replace(/\D/g, '')) || phone.length > 30) return 'requirePickupPhone';
     }
 
     return '';

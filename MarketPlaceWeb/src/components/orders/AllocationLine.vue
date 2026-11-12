@@ -127,12 +127,6 @@ async function changeWarehouse(row) {
     row.shelf_code = '';
     await loadShelves(row.wh_code);
 }
-async function chooseLocation(row, location) {
-    row.wh_code = location.wh_code;
-    row.shelf_code = '';
-    await loadShelves(location.wh_code);
-    if (alive && row.wh_code === location.wh_code && shelves.value[location.wh_code]?.some((shelf) => shelf.code === location.shelf_code)) row.shelf_code = location.shelf_code;
-}
 async function loadOptions() {
     if (isFixed.value) return;
     const request = ++version;
@@ -272,22 +266,6 @@ onBeforeUnmount(() => {
                     <p v-if="row.wh_code && row.shelf_code" class="location-caption">
                         {{ row.wh_code }} · {{ warehouses?.find((wh) => wh.code === row.wh_code)?.name_1 }} / {{ row.shelf_code }} · {{ shelves[row.wh_code]?.find((shelf) => shelf.code === row.shelf_code)?.name_1 }}
                     </p>
-                    <div v-if="!isFixed" class="stock-strip">
-                        <span class="stock-badge" :class="stockAt(row) == null ? 'unknown' : Number(stockAt(row)) < Number(row.qty) ? 'short' : 'enough'">{{
-                            stockAt(row) == null
-                                ? 'ยังไม่ทราบยอด · ยังยืนยันได้ แต่ควรตรวจสอบก่อน'
-                                : `ตำแหน่งที่เลือก: ${qty(stockAt(row))} ${source.unit_code}${Number(stockAt(row)) < Number(row.qty) ? ' · ไม่พอ · ยังยืนยันได้ แต่ควรตรวจสอบก่อน' : ' · เพียงพอ ณ เวลาที่โหลด'}`
-                        }}</span>
-                        <details v-if="optionFor(row)">
-                            <summary>สต๊อกจริงรวม {{ qty(optionFor(row).balance_qty) }} {{ source.unit_code }} · ดูตำแหน่ง</summary>
-                            <div v-for="location in optionFor(row).locations" :key="`${location.wh_code}/${location.shelf_code}`" class="stock-location">
-                                <span
-                                    >{{ location.wh_code }} {{ location.wh_name }} / {{ location.shelf_code }} {{ location.shelf_name }} · <strong>{{ qty(location.balance_qty) }} {{ source.unit_code }}</strong></span
-                                ><Button label="ใช้ตำแหน่งนี้" text size="small" :disabled="disabled || !warehouses?.some((wh) => wh.code === location.wh_code)" @click="chooseLocation(row, location)" />
-                            </div>
-                            <p v-if="!optionFor(row).locations?.length">ไม่มีข้อมูลตำแหน่งจากฟังก์ชันสต๊อก</p>
-                        </details>
-                    </div>
                     <small v-if="optionFor(row)?.disabled_reason" class="validation">{{ optionFor(row).disabled_reason }}</small>
                 </div>
             </fieldset>
@@ -576,46 +554,6 @@ onBeforeUnmount(() => {
 .allocation-grid > .p-button {
     margin-top: 1.7rem;
 }
-.stock-strip {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1rem;
-    margin-top: 0.7rem;
-    font-size: 0.75rem;
-    align-items: start;
-}
-.stock-badge {
-    border-radius: 5px;
-    padding: 0.25rem 0.5rem;
-}
-.unknown {
-    background: #f0f2f3;
-    color: #54616a;
-}
-.enough {
-    background: #e9f5ee;
-    color: #22623d;
-}
-.short {
-    background: #fff1db;
-    color: #915419;
-}
-.stock-strip details {
-    flex: 1;
-    min-width: 180px;
-}
-.stock-strip summary {
-    cursor: pointer;
-    padding: 0.25rem 0;
-    color: #586c5f;
-}
-.stock-location {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid #edf1ed;
-}
 .line-footer {
     display: flex;
     align-items: center;
@@ -646,7 +584,6 @@ onBeforeUnmount(() => {
 .allocation-grid label > span,
 .allocation-grid .product-field > span,
 .allocation-grid small,
-.stock-strip,
 .validation-note,
 .set-note {
     font-size: 0.9rem;
@@ -715,10 +652,6 @@ onBeforeUnmount(() => {
     }
     .line-footer {
         flex-wrap: wrap;
-    }
-    .stock-location {
-        align-items: start;
-        flex-direction: column;
     }
 }
 </style>

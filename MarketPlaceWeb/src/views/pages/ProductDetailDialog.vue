@@ -901,6 +901,7 @@ const dialogVisible = computed({
         :style="dialogStyle"
         :breakpoints="dialogBreakpoints"
         :closable="true"
+        :dismissableMask="!isMobile"
         :closeOnEscape="true"
         :showHeader="false"
         :blockScroll="isMobile"

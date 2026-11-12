@@ -8,14 +8,13 @@ const props = defineProps({
 });
 const emit = defineEmits(['edit', 'close']);
 const { t } = useLanguageStore();
-const draft = ref('');
+const draft = defineModel('draft', { type: String, default: '' });
 const input = ref(null);
 const saving = ref(false);
 const valid = computed(() => /^\d+$/.test(draft.value) && Number.isSafeInteger(Number(draft.value))
     && Number(draft.value) >= 1 && (props.max === null || Number(draft.value) <= props.max));
 watch(() => props.active, async active => {
     if (!active) return;
-    draft.value = String(props.qty);
     await nextTick();
     input.value?.select();
 });

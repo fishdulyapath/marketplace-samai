@@ -1,5 +1,6 @@
 <script setup>
 import SalesSettingsService from '@/services/SalesSettingsService';
+import PickupScheduleEditor from '@/components/admin/PickupScheduleEditor.vue';
 import Button from 'primevue/button';
 import Column from 'primevue/column';
 import DataTable from 'primevue/datatable';
@@ -32,7 +33,8 @@ const settings = ref({
     order_doc_source: 'client',
     order_doc_pattern: 'BSWYYMMDD####',
     cancel_doc_pattern: 'BSCYYMMDD####',
-    erp_max_lines_per_doc: 0
+    erp_max_lines_per_doc: 0,
+    pickup_schedule: null
 });
 const featuredProducts = ref([]);
 const productPreorderRows = ref([]);
@@ -251,7 +253,24 @@ const salesStarThresholdError = computed(() => {
     }
     return '';
 });
-const canSaveSettings = computed(() => !isLoading.value && !isSavingSettings.value && !stockPercentError.value && !salesStarThresholdError.value);
+const pickupScheduleError = computed(() => {
+    const schedule = settings.value.pickup_schedule;
+    if (!schedule) return 'ยังโหลดรอบรับสินค้าไม่สำเร็จ';
+    if (!Number.isInteger(schedule.days_ahead) || schedule.days_ahead < 0 || schedule.days_ahead > 365) return 'จองล่วงหน้าต้องเป็นจำนวนเต็ม 0–365 วัน';
+    if (!Number.isInteger(schedule.lead_hours) || schedule.lead_hours < 0 || schedule.lead_hours > 24) return 'เวลาเตรียมสินค้าต้องเป็นจำนวนเต็ม 0–24 ชั่วโมง';
+    if (!Array.isArray(schedule.days) || schedule.days.length !== 7) return 'ต้องกำหนดรอบให้ครบ 7 วัน';
+    const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+    for (const day of schedule.days) {
+        if (typeof day.enabled !== 'boolean' || !Array.isArray(day.slots) || (day.enabled && !day.slots.length)) return 'วันที่เปิดรับต้องมีอย่างน้อย 1 รอบ';
+        const slots = [...day.slots].sort((a, b) => String(a.start).localeCompare(String(b.start)));
+        for (let i = 0; i < slots.length; i += 1) {
+            if (!time.test(slots[i].start) || !time.test(slots[i].end) || slots[i].start >= slots[i].end) return 'เวลาเริ่มและสิ้นสุดต้องถูกต้องและอยู่ในวันเดียวกัน';
+            if (i && slots[i - 1].end > slots[i].start) return 'รอบรับสินค้าในวันเดียวกันซ้อนกัน';
+        }
+    }
+    return '';
+});
+const canSaveSettings = computed(() => !isLoading.value && !isSavingSettings.value && !stockPercentError.value && !salesStarThresholdError.value && !pickupScheduleError.value);
 const isProductPreorderEditorDisabled = computed(() => isLoadingProductPreorder.value || isSavingProductPreorder.value || productPreorderUnavailable.value);
 const canSaveProductPreorder = computed(() => !isProductPreorderEditorDisabled.value && Boolean(selectedPreorderProductCode.value));
 const canSaveFeaturedProduct = computed(() => !isSearchingProducts.value && !isSavingFeature.value && Boolean(selectedProductCode.value) && !featureDateError.value && !featureLineNumberError.value);
@@ -366,7 +385,8 @@ async function loadSettings() {
             order_doc_source: data.order_doc_source === 'server' ? 'server' : 'client',
             order_doc_pattern: data.order_doc_pattern || 'BSWYYMMDD####',
             cancel_doc_pattern: data.cancel_doc_pattern || 'BSCYYMMDD####',
-            erp_max_lines_per_doc: Number(data.erp_max_lines_per_doc || 0)
+            erp_max_lines_per_doc: Number(data.erp_max_lines_per_doc || 0),
+            pickup_schedule: data.pickup_schedule || null
         };
     } catch (error) {
         toast.add({ severity: 'error', summary: 'โหลดตั้งค่าไม่สำเร็จ', detail: error?.response?.data?.message || error.message, life: 3500 });
@@ -406,6 +426,10 @@ async function saveSettings() {
         toast.add({ severity: 'warn', summary: docPatternError.value, life: 2500 });
         return;
     }
+    if (pickupScheduleError.value) {
+        toast.add({ severity: 'warn', summary: pickupScheduleError.value, life: 3000 });
+        return;
+    }
     isSavingSettings.value = true;
     try {
         const payload = {
@@ -417,7 +441,8 @@ async function saveSettings() {
             order_doc_source: settings.value.order_doc_source === 'server' ? 'server' : 'client',
             order_doc_pattern: String(settings.value.order_doc_pattern || '').trim().toUpperCase(),
             cancel_doc_pattern: String(settings.value.cancel_doc_pattern || '').trim().toUpperCase(),
-            erp_max_lines_per_doc: Math.max(0, Math.min(99, Math.trunc(Number(settings.value.erp_max_lines_per_doc) || 0)))
+            erp_max_lines_per_doc: Math.max(0, Math.min(99, Math.trunc(Number(settings.value.erp_max_lines_per_doc) || 0))),
+            pickup_schedule: settings.value.pickup_schedule
         };
         const response = await SalesSettingsService.saveSettings(payload);
         if (!response.success) throw new Error(response.message || 'บันทึกไม่สำเร็จ');
@@ -836,6 +861,18 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
                 </div>
+            </article>
+
+            <article class="settings-card marketplace-default-card">
+                <div class="card-title">
+                    <i class="pi pi-calendar"></i>
+                    <div>
+                        <h2>รอบรับสินค้า</h2>
+                        <span>กำหนดวันที่เปิดรับและช่วงเวลาที่ลูกค้าเลือกได้</span>
+                    </div>
+                </div>
+                <PickupScheduleEditor v-if="settings.pickup_schedule" v-model="settings.pickup_schedule" :disabled="isLoading || isSavingSettings" />
+                <small v-if="pickupScheduleError" class="field-error">{{ pickupScheduleError }}</small>
             </article>
 
             <article class="settings-card marketplace-default-card">

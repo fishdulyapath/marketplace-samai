@@ -6,6 +6,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
+import { useAuthenStore } from '@/stores/authen';
+import { useOrderBell } from '@/composables/useOrderBell';
 import AdminOrderService from '@/services/AdminOrderService';
 import { getOrderTotalBeforeVat } from '@/utils/orderTaxTotals';
 import OrderDocumentFlow from '@/components/orders/OrderDocumentFlow.vue';
@@ -65,6 +67,13 @@ const STATUS_TABS = [
 ];
 const statusTab = ref('');
 const statusCounts = ref({});
+
+const auth = useAuthenStore();
+const hasWaitingOrders = () => tabCount('pending') + tabCount('awaiting_confirmation') > 0;
+const { soundOn, needsGesture, ring, toggleSound, stopSound } = useOrderBell(
+    () => `mpr-queue-sound:${import.meta.env.VITE_APP_API || location.origin}:${auth.empCode}`,
+    hasWaitingOrders
+);
 
 function tabCount(value) {
     if (value === '') return Object.values(statusCounts.value).reduce((a, b) => a + Number(b || 0), 0);
@@ -213,7 +222,7 @@ let inFlight = null;
 let timer = null;
 let lastLoadStartedAt = 0;
 
-async function load({ silent = false, throttle = false } = {}) {
+async function load({ silent = false, throttle = false, remind = false } = {}) {
     // throttle ใช้เฉพาะรอบที่ระบบสั่งเอง (กลับมาเห็นหน้า) — ที่ผู้ใช้กดเองต้องทำงานทันทีเสมอ
     if (throttle && Date.now() - lastLoadStartedAt < MIN_RELOAD_GAP_MS) return;
 
@@ -243,7 +252,10 @@ async function load({ silent = false, throttle = false } = {}) {
         pageAmount.value = Number(body.page_amount || 0);
         appliedFrom.value = body.date_from || '';
         appliedTo.value = body.date_to || '';
+        const previouslyWaiting = hasWaitingOrders();
         statusCounts.value = body.status_counts || {};
+        if (!hasWaitingOrders()) stopSound();
+        else if (!needsGesture.value && (remind || !previouslyWaiting)) void ring();
         // เติมช่องวันที่ให้ผู้ใช้เห็นว่าระบบเลือกช่วงไหนให้ ตอนเข้าหน้าครั้งแรก
         if (!draft.value.dateFrom) draft.value.dateFrom = appliedFrom.value;
         if (!draft.value.dateTo) draft.value.dateTo = appliedTo.value;
@@ -290,9 +302,10 @@ function goPage(next) {
 function startAutoRefresh() {
     stopAutoRefresh();
     timer = setInterval(() => {
-        if (document.hidden) return;
-        load({ silent: true });
-    }, AUTO_REFRESH_MS);
+        if (inFlight) return;
+        if (!soundOn.value && (document.hidden || Date.now() - lastLoadStartedAt < AUTO_REFRESH_MS)) return;
+        load({ silent: true, remind: true });
+    }, 60000);
 }
 
 function stopAutoRefresh() {
@@ -327,6 +340,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="ao-head__actions">
                 <Button label="เมนูหลัก" icon="pi pi-arrow-left" outlined size="small" @click="router.push('/admin')" />
+                <Button :label="needsGesture ? 'คลิกเพื่อเปิดเสียงเตือน' : soundOn ? 'เสียงเตือนเปิด' : 'เสียงเตือนปิด'" :aria-pressed="soundOn && !needsGesture" :icon="soundOn && !needsGesture ? 'pi pi-bell' : 'pi pi-bell-slash'" outlined size="small" @click="toggleSound" />
                 <Button label="รีเฟรช" icon="pi pi-refresh" size="small" :loading="loading || refreshing" @click="load()" />
             </div>
         </div>
@@ -385,7 +399,7 @@ onBeforeUnmount(() => {
                     {{ lastUpdatedAt || '-' }}
                     <i v-if="refreshing" class="pi pi-spin pi-spinner ao-metric__spin"></i>
                 </strong>
-                <span class="ao-metric__hint">รีเฟรชอัตโนมัติทุก 2 นาที</span>
+                <span class="ao-metric__hint">รีเฟรชอัตโนมัติทุก {{ soundOn ? 1 : 2 }} นาที</span>
             </div>
         </div>
 

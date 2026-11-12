@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { useOrderBell } from '@/composables/useOrderBell';
+import { useRoute, useRouter, onBeforeRouteUpdate, onBeforeRouteLeave } from 'vue-router';
 import PendingOrderService from '@/services/PendingOrderService';
 import InventoryService from '@/services/InventoryService';
 import AllocationLine from './AllocationLine.vue';
@@ -8,6 +9,48 @@ import { allocationPayload } from '@/utils/orderAllocations';
 import { bulkLocationRows, createOrderDraftStore, documentSignature, mergeSameLocation, requestAge } from '@/utils/orderWorkspace';
 
 const props = defineProps({ employeeCode: { type: String, default: '' }, draftScope: { type: String, default: () => import.meta.env.VITE_APP_API || location.origin } });
+const router = useRouter();
+const route = useRoute();
+const docNo = computed(() => route.params.docNo || '');
+const datesOpen = ref(false);
+const queueTotal = ref(null);
+let queueScroll = 0, enteredFromQueue = false;
+let applied = {};
+const { soundOn, needsGesture, ring, toggleSound, stopSound } = useOrderBell(
+    () => `mpr-queue-sound:${props.draftScope}:${props.employeeCode}`,
+    () => !docNo.value && queueTotal.value > 0
+);
+function enterDocument(row) {
+    queueScroll = window.scrollY;
+    try {
+        sessionStorage.setItem(queueStateKey(), JSON.stringify({
+            doc: row.doc_no, scroll: queueScroll, search: search.value, from: dateFrom.value,
+            to: dateTo.value, datesOpen: datesOpen.value, page: page.value, sort: sort.value, applied
+        }));
+    } catch { /* In-memory filters still work when storage is unavailable. */ }
+    enteredFromQueue = true;
+    router.push({ name: route.name, params: { ...route.params, docNo: row.doc_no }, query: route.query });
+}
+const queueStateKey = () => `mpr-queue-view:${props.draftScope}:${props.employeeCode}`;
+function restoreQueueOnReload() {
+    try {
+        const state = JSON.parse(sessionStorage.getItem(queueStateKey()));
+        if (!state || state.doc !== docNo.value) return;
+        search.value = state.search;
+        dateFrom.value = state.from;
+        dateTo.value = state.to;
+        datesOpen.value = state.datesOpen;
+        page.value = state.page;
+        sort.value = state.sort;
+        applied = state.applied;
+        queueScroll = state.scroll;
+    } catch { /* A direct link can always return to the default queue. */ }
+}
+function backToQueue() {
+    if (enteredFromQueue) router.back();
+    else router.replace({ name: route.name, params: { ...route.params, docNo: '' }, query: route.query });
+}
+onBeforeRouteUpdate(() => !busy.value);
 const sort = ref('oldest'),
     filter = ref('all'),
     folded = ref({}),
@@ -222,15 +265,28 @@ function applyBulk() {
 function displayDate(value) {
     return value ? String(value).slice(0, 10) : '—';
 }
-async function load(reset = false) {
-    if (reset) page.value = 1;
+async function load(reset = false, notify = false) {
+    if (reset) {
+        page.value = 1;
+        applied = { search: search.value, date_from: dateFrom.value || undefined, date_to: dateTo.value || undefined };
+    }
     const version = ++listVersion;
     loading.value = true;
     try {
-        const data = await PendingOrderService.list(true, { search: search.value, date_from: dateFrom.value || undefined, date_to: dateTo.value || undefined, page: page.value, sort: sort.value });
-        if (version !== listVersion) return;
+        const filtered = Object.values(applied).some(Boolean);
+        const [data, all] = await Promise.all([
+            PendingOrderService.list(true, { ...applied, page: page.value, sort: sort.value }),
+            filtered && notify && soundOn.value ? PendingOrderService.list(true, { page: 1, page_size: 1 }) : null
+        ]);
+        if (version !== listVersion || docNo.value) return;
         rows.value = data.data;
-        total.value = data.total;
+        total.value = Number(data.total);
+        if (!filtered || all) queueTotal.value = Number((all || data).total);
+        if (!rows.value.length && page.value > 1) {
+            page.value = Math.max(1, Math.ceil(total.value / 20));
+            return await load(false, notify);
+        }
+        if (notify && queueTotal.value > 0 && !needsGesture.value) void ring();
     } catch (err) {
         if (version === listVersion) error.value = messageOf(err);
     } finally {
@@ -253,7 +309,7 @@ async function open(row) {
             removeDraft(row.doc_no);
             selected.value = null;
             notice.value = fresh.status === 'confirmed' ? `คำขอนี้ได้รับการยืนยันแล้ว ${fresh.qt_doc_no || ''}` : 'คำขอนี้ปิดแล้ว กรุณาเลือกคำขออื่น';
-            await load();
+            backToQueue();
             return;
         }
         fresh.items.forEach((item) => {
@@ -326,11 +382,8 @@ async function act() {
         selected.value = null;
         action.value = '';
         reason.value = '';
-        await load();
-        if (!rows.value.length && page.value > 1) {
-            page.value--;
-            await load();
-        }
+        busy.value = false;
+        backToQueue();
     } catch (err) {
         const changedQuote = err?.response?.data?.quote;
         if (err?.response?.data?.code === 'PENDING_QT_PRICE_CHANGED' && changedQuote) {
@@ -341,7 +394,8 @@ async function act() {
             action.value = '';
             removeDraft(doc);
             selected.value = null;
-            await load();
+            busy.value = false;
+            backToQueue();
         } else {
             action.value = '';
         }
@@ -351,15 +405,49 @@ async function act() {
         busy.value = false;
     }
 }
-onMounted(() => {
-    initDraftStore();
-    load();
+function startQueueTimer() {
+    clearInterval(ageTimer);
     ageTimer = setInterval(() => {
         now.value = Date.now();
+        if (!docNo.value && !loading.value) void load(false, true);
     }, 60000);
+}
+async function showPage(doc, previousDoc) {
+    clearInterval(ageTimer);
+    stopSound();
+    listVersion++;
+    detailVersion++;
+    loading.value = false;
+    opening.value = false;
+    selected.value = null;
+    action.value = '';
+    bulkVisible.value = false;
+    if (doc) {
+        notice.value = '';
+        await nextTick();
+        window.scrollTo(0, 0);
+        await open({ doc_no: doc });
+    } else {
+        enteredFromQueue = false;
+        await load(false, !previousDoc);
+        if (docNo.value || !mounted) return;
+        await nextTick();
+        window.scrollTo(0, queueScroll);
+        startQueueTimer();
+    }
+}
+let mounted = false;
+watch(docNo, (doc, previous) => { if (mounted) void showPage(doc, previous); });
+onMounted(() => {
+    mounted = true;
+    initDraftStore();
+    if (docNo.value) restoreQueueOnReload();
+    void showPage(docNo.value);
     window.addEventListener('beforeunload', beforeUnload);
 });
 onBeforeUnmount(() => {
+    mounted = false;
+    stopSound();
     listVersion++;
     detailVersion++;
     bulkVersion++;
@@ -370,13 +458,15 @@ onBeforeUnmount(() => {
 
 <template>
     <section class="staff-orders" aria-label="คำขอรอดำเนินการ">
-        <header class="workspace-title">
+        <header v-if="!docNo" class="workspace-title">
             <div>
                 <h1>
-                    รอดำเนินการ <span class="count">{{ total }}</span>
+                    รายการ MPR รอดำเนินการ <span class="count">{{ total }}</span>
                 </h1>
                 <p>จัดสินค้าและแหล่งจัดส่ง ก่อนยืนยันใบเสนอราคา</p>
             </div>
+            <div class="queue-actions">
+                <Button :label="needsGesture ? 'คลิกเพื่อเปิดเสียงเตือน' : soundOn ? 'เสียงเตือนเปิด' : 'เสียงเตือนปิด'" :aria-pressed="soundOn && !needsGesture" :icon="soundOn && !needsGesture ? 'pi pi-bell' : 'pi pi-bell-slash'" outlined @click="toggleSound" />
             <Button
                 label="รีเฟรชคิว"
                 icon="pi pi-refresh"
@@ -387,6 +477,7 @@ onBeforeUnmount(() => {
                     load();
                 "
             />
+            </div>
         </header>
         <Message v-if="error" severity="error" :closable="false">
             {{ error }}
@@ -396,11 +487,11 @@ onBeforeUnmount(() => {
                 </li>
             </ul> </Message
         ><Message v-if="notice" severity="success" :closable="false">{{ notice }}</Message>
-        <div class="workspace-grid" :class="{ 'has-selection': selected }">
-            <aside class="order-queue" aria-label="คิวคำขอ">
+        <div class="workspace-grid">
+            <aside v-if="!docNo" class="order-queue" aria-label="คิวคำขอ">
                 <form class="queue-filters" @submit.prevent="load(true)">
                     <label class="search-field">ค้นหาคำขอ<InputText v-model="search" placeholder="เลขคำขอ / ลูกค้า" /></label>
-                    <details>
+                    <details :open="datesOpen" @toggle="datesOpen = $event.target.open">
                         <summary>กรองวันที่</summary>
                         <div class="date-fields">
                             <label>ตั้งแต่<input v-model="dateFrom" type="date" /></label><label>ถึง<input v-model="dateTo" type="date" /></label>
@@ -418,20 +509,15 @@ onBeforeUnmount(() => {
                         </select></label
                     >
                 </div>
-                <p v-if="loading" class="empty-state" role="status">กำลังโหลดคิว…</p>
+                <p v-if="loading && !rows.length" class="empty-state" role="status">กำลังโหลดคิว…</p>
                 <p v-else-if="!rows.length" class="empty-state">ไม่มีคำขอในช่วงที่เลือก</p>
                 <div v-else class="queue-list">
-                    <button v-for="row in rows" :key="row.doc_no" type="button" class="queue-card" :class="{ active: selected?.doc_no === row.doc_no }" :aria-pressed="selected?.doc_no === row.doc_no" :disabled="busy || opening" @click="open(row)">
-                        <span class="queue-card-top"
-                            ><span class="pending-dot">{{ requestAge(row.created_at, now) }}</span
-                            ><span>{{ displayDate(row.doc_date) }}</span></span
-                        ><strong>{{ row.cust_name || row.cust_code }}</strong
-                        ><span class="doc-code">{{ row.doc_no }}</span
-                        ><span class="queue-card-bottom"
-                            ><span>{{ row.cust_code }}</span
-                            ><b>฿{{ money(row.total_amount) }}</b></span
-                        >
-                        <small v-if="savedDocs.includes(row.doc_no)" class="draft-tag">มีร่างที่จัดไว้</small>
+                    <div class="queue-columns queue-head" aria-hidden="true"><span>เลขที่ MPR</span><span>ลูกค้า</span><span>เวลารอ</span><span>ยอดคำขอ</span><span></span></div>
+                    <button v-for="row in rows" :key="row.doc_no" type="button" class="queue-columns queue-card" @click="enterDocument(row)">
+                        <span><strong>{{ row.doc_no }}</strong><small>{{ displayDate(row.doc_date) }} {{ row.doc_time }}</small></span>
+                        <span>{{ row.cust_name || row.cust_code }}<small>{{ row.cust_code }} <b v-if="savedDocs.includes(row.doc_no)" class="draft-tag">มีร่างที่จัดไว้</b></small></span>
+                        <span class="pending-dot">{{ requestAge(row.created_at, now) }}</span>
+                        <b>฿{{ money(row.total_amount) }}</b><i class="pi pi-chevron-right" aria-hidden="true" />
                     </button>
                 </div>
                 <nav v-if="total > 20" class="queue-pager" aria-label="หน้าคิว">
@@ -457,14 +543,14 @@ onBeforeUnmount(() => {
                     />
                 </nav>
             </aside>
-            <section class="order-work" aria-label="พื้นที่จัดสินค้า" :aria-busy="opening">
+            <section v-else class="order-work" aria-label="พื้นที่จัดสินค้า" :aria-busy="opening">
+                <Button label="กลับไปคิวคำขอ" icon="pi pi-arrow-left" text :disabled="busy" @click="backToQueue" />
                 <p v-if="opening" class="empty-state" role="status">กำลังเปิดคำขอ…</p>
                 <template v-else-if="selected">
-                    <Button class="back-to-queue" label="กลับไปคิวคำขอ" icon="pi pi-arrow-left" text :disabled="busy" @click="selected = null" />
                     <header class="document-heading">
                         <div>
-                            <h2>{{ selected.cust_name || selected.cust_code }}</h2>
-                            <p>{{ selected.doc_no }} · {{ displayDate(selected.doc_date) }} {{ selected.doc_time }}</p>
+                            <h2>{{ selected.doc_no }}</h2>
+                            <p>{{ selected.cust_name || selected.cust_code }} · {{ displayDate(selected.doc_date) }} {{ selected.doc_time }}</p>
                         </div>
                         <span class="status-tag">รอพนักงานยืนยัน</span>
                     </header>
@@ -549,12 +635,6 @@ onBeforeUnmount(() => {
                         </div>
                     </footer>
                 </template>
-                <div v-else class="welcome-state">
-                    <span class="welcome-icon"><i class="pi pi-box" /></span>
-                    <h2>เลือกคำขอ แล้วเริ่มจัดสินค้า</h2>
-                    <p>เลือกสินค้าจริง จำนวน คลัง และที่เก็บ<br />ตรวจสอบให้ครบก่อนสร้างใบเสนอราคา QT</p>
-                    <span class="welcome-flow">MPR / 300 <i class="pi pi-arrow-right" /> จัดสินค้า <i class="pi pi-arrow-right" /> QT / 30</span>
-                </div>
             </section>
         </div>
         <Dialog
@@ -1149,9 +1229,7 @@ onBeforeUnmount(() => {
     .has-selection .order-queue {
         display: none;
     }
-    .workspace-grid:not(.has-selection) .order-work {
-        display: none;
-    }
+
     .back-to-queue {
         display: inline-flex;
         margin-bottom: 0.7rem;
@@ -1192,5 +1270,23 @@ onBeforeUnmount(() => {
     .stock-note {
         line-height: 1.7;
     }
+}
+.workspace-grid { display: block; }
+.order-queue { position: static; }
+.queue-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+.queue-list { max-height: none; min-height: 0; }
+.queue-columns { display: grid; grid-template-columns: minmax(12rem, 1.2fr) minmax(12rem, 1.5fr) minmax(7rem, .75fr) minmax(7rem, .65fr) 1rem; gap: 1rem; align-items: center; }
+.queue-head { background: #f4f8f5; color: #52665a; padding: .7rem .8rem; font-size: .85rem; }
+.queue-columns > :nth-child(4) { text-align: right; }
+.queue-card strong { color: #146044; }
+.queue-card small { display: block; color: #627569; margin-top: .25rem; }
+.queue-filters .search-field { width: min(32rem, 100%); }
+@media (max-width: 760px) {
+    .queue-head { display: none; }
+    .queue-card { grid-template-columns: 1fr auto; }
+    .queue-card > :nth-child(2) { grid-column: 1; grid-row: 2; }
+    .queue-card > :nth-child(3) { grid-column: 2; grid-row: 1; }
+    .queue-card > i { display: none; }
+    .workspace-title { flex-wrap: wrap; }
 }
 </style>
