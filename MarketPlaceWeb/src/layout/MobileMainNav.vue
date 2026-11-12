@@ -14,7 +14,7 @@ defineEmits(['navigate']);
             :disabled="disabled" @click="$emit('navigate', item, $event)">
             <span class="mobile-nav-icon">
                 <i :class="item.icon" aria-hidden="true"></i>
-                <span v-if="item.to === '/cart' && authenticated && totalItems > 0" class="mobile-cart-badge">{{ totalItems > 99 ? '99+' : totalItems }}</span>
+                <span v-if="item.to === '/basket' && authenticated && totalItems > 0" class="mobile-cart-badge">{{ totalItems > 99 ? '99+' : totalItems }}</span>
             </span>
             <span>{{ item.label }}</span>
         </button>

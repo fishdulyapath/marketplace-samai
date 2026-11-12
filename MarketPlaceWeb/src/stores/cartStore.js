@@ -254,7 +254,7 @@ export const useCartStore = defineStore('cart', () => {
     }
 
     // โหลดข้อมูลตะกร้าจาก API
-    async function loadCartItems(forceRefresh = false) {
+    async function loadCartItems(forceRefresh = false, allPages = false) {
         try {
             isLoading.value = true;
             error.value = null;
@@ -270,7 +270,7 @@ export const useCartStore = defineStore('cart', () => {
                 cartItems.value = [];
             }
 
-            const response = await CartService.getCartItems(custCode.value);
+            const response = allPages ? await CartService.getAllCartItems(custCode.value) : await CartService.getCartItems(custCode.value);
             if (response.data && response.data.success && response.data.data) {
                 // แปลงข้อมูลให้มีรูปแบบเดียวกัน
                 cartItems.value = (response.data.data || []).map(normalizeCartItem);
@@ -486,7 +486,7 @@ export const useCartStore = defineStore('cart', () => {
             }
 
             // ค้นหาสินค้าในตะกร้า
-            const existingItemIndex = cartItems.value.findIndex((item) => item.id === itemToUpdate.id || item.guid_code === itemToUpdate.id || item.item_code === itemToUpdate.item_code);
+            const existingItemIndex = cartItems.value.findIndex((item) => item.item_code === itemToUpdate.item_code && item.unit_code === itemToUpdate.unit_code && (!(itemToUpdate.guid_code || itemToUpdate.id) || (item.guid_code || item.id) === (itemToUpdate.guid_code || itemToUpdate.id)));
 
             // กำหนดข้อมูลที่จะส่งไป API
             const qty = itemToUpdate.quantity || itemToUpdate.qty;
@@ -531,7 +531,7 @@ export const useCartStore = defineStore('cart', () => {
     }
 
     // ลบสินค้าออกจากตะกร้า
-    async function removeFromCart(itemId) {
+    async function removeFromCart(lineOrId) {
         try {
             isLoading.value = true;
             error.value = null;
@@ -540,7 +540,9 @@ export const useCartStore = defineStore('cart', () => {
                 throw new Error('ไม่พบข้อมูลผู้ใช้');
             }
 
-            const itemToRemove = cartItems.value.find((item) => item.id === itemId || item.guid_code === itemId);
+            const line = typeof lineOrId === 'object' ? lineOrId : null;
+            const itemId = line ? line.guid_code || line.id : lineOrId;
+            const itemToRemove = line || cartItems.value.find(item => item.id === itemId || item.guid_code === itemId);
 
             if (!itemToRemove) {
                 throw new Error('ไม่พบสินค้าในตะกร้า');
@@ -787,7 +789,8 @@ export const useCartStore = defineStore('cart', () => {
                     }
                     // เลขที่ลูกค้าเห็นคือ "เลขหลัก" จาก server — ถ้าเอกสารถูกแบ่งหลายใบ
                     // จะไม่โชว์เลขย่อย (-1/-2) เพื่อให้ตรงกับเลขที่ใช้ค้นหา/ยกเลิก (REQ4)
-                    const savedDocNo = response.data.main_doc_no || response.data.doc_no || payload.doc_no;
+                    const savedDocNo = response.data.mpr_doc_no || response.data.main_doc_no || response.data.doc_no;
+                    if (!savedDocNo) throw new Error('ไม่พบเลขคำขอในผลการบันทึก');
                     if (!orderDocDate) orderDocDate = response.data.doc_date || '';
                     if (!orderDocTime) orderDocTime = response.data.doc_time || '';
                     savedDocNos.push(savedDocNo);
@@ -800,7 +803,7 @@ export const useCartStore = defineStore('cart', () => {
                 return {
                     success: true,
                     message: 'ส่งคำขอแล้ว รอพนักงานจัดคลัง',
-                    orderNumber: savedDocNos[0] || docNo,
+                    orderNumber: savedDocNos[0],
                     orderNumbers: savedDocNos,
                     orderDocuments: savedDocuments,
                     orderDocDate,

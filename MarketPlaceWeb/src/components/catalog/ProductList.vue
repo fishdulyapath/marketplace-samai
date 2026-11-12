@@ -588,6 +588,12 @@ function applyMobileFilters() {
 }
 
 // เปิด Dialog แสดงรายละเอียดสินค้า
+let detailScroll = null;
+function restoreDetailScroll() {
+    if (detailScroll === null || route.name !== 'catalog' || showProductDetail.value || showProductFullDetail.value || showProductSetDetail.value) return;
+    window.scrollTo({ top: detailScroll, behavior: 'instant' });
+    detailScroll = null;
+}
 function viewProductDetail(product) {
     if (isSalePremiumProduct(product)) {
         selectedSalePremiumCode.value = product.sale_premium_code || product.item_code;
@@ -597,6 +603,7 @@ function viewProductDetail(product) {
         showSalePremiumDetail.value = true;
         return;
     }
+    detailScroll = window.scrollY;
     selectedProductCode.value = product.item_code;
     showProductFullDetail.value = false;
     if (isSetProduct(product)) {
@@ -609,7 +616,9 @@ function viewProductDetail(product) {
     showProductDetail.value = true;
 }
 
-function openFullProductDetail(itemCode) {
+const fullSelection = ref(null);
+function openFullProductDetail(itemCode, selection = null) {
+    fullSelection.value = selection;
     selectedProductCode.value = itemCode;
     showProductDetail.value = false;
     showProductSetDetail.value = false;
@@ -816,8 +825,8 @@ function handleFavoriteChanged(data) {
                     :aria-label="`${t('productDetail.viewMoreDetails')} ${getProductDisplayName(product)}`"
                     :aria-describedby="isAuthenticated && quantitiesInCart.has(product.item_code) ? 'catalog-qty-' + encodeURIComponent(product.item_code) : undefined"
                     @click="viewProductDetail(product)"
-                    @keydown.enter.prevent="viewProductDetail(product)"
-                    @keydown.space.prevent="viewProductDetail(product)"
+                    @keydown.enter.self.prevent="viewProductDetail(product)"
+                    @keydown.space.self.prevent="viewProductDetail(product)"
                 >
                     <div class="relative product-image-wrap">
                         <img :src="product.image" :alt="getProductDisplayName(product)" class="w-full aspect-square object-contain" @error="$event.target.src = product.imageFallback" />
@@ -929,6 +938,7 @@ function handleFavoriteChanged(data) {
             :visible="showProductDetail"
             :item-code="selectedProductCode"
             @update:visible="showProductDetail = $event"
+            @closed="restoreDetailScroll"
             @added-to-cart="handleAddedToCart"
             @favorite-changed="handleFavoriteChanged"
             @show-full-detail="openFullProductDetail"
@@ -945,10 +955,11 @@ function handleFavoriteChanged(data) {
             @show-full-detail="openFullProductDetail"
         />
 
-        <ProductFullDetailDialog
+        <ProductFullDetailDialog :selection="fullSelection"
             :visible="showProductFullDetail"
             :item-code="selectedProductCode"
             @update:visible="showProductFullDetail = $event"
+            @closed="restoreDetailScroll"
             @added-to-cart="handleAddedToCart"
             @favorite-changed="handleFavoriteChanged"
         />

@@ -1,4 +1,5 @@
 <script setup>
+import { useCheckoutFooter } from '@/composables/useCheckoutFooter';
 import CartService from '@/services/CartService';
 import { PRODUCT_IMAGE_PLACEHOLDER } from '@/utils/productPlaceholder';
 import ProductService from '@/services/ProductService';
@@ -6,7 +7,7 @@ import { useCartStore } from '@/stores/cartStore';
 import { useLanguageStore } from '@/stores/languageStore';
 import { isSalePremiumItem } from '@/utils/itemType';
 import { pickProductName } from '@/utils/languageDisplay';
-import { isMaxOrderQtyReached, normalizeMaxOrderQty } from '@/utils/cartLimits';
+import { normalizeMaxOrderQty } from '@/utils/cartLimits';
 import { getPreorderSplit, isPreorderAllowed, toOrderQty, toStockQty } from '@/utils/preorderSplit';
 import { buildBaseUnitRatioText } from '@/utils/unitConversion';
 import { useConfirm } from 'primevue/useconfirm';
@@ -15,6 +16,7 @@ import Tag from 'primevue/tag';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = defineProps({
+    saveQuantity: { type: Function, required: true },
     cartItems: {
         type: Array,
         required: true
@@ -170,12 +172,6 @@ function handleClearSearch() {
     emit('clear-search');
 }
 
-// ค้นหาเมื่อกด Enter
-function handleSearchKeydown(event) {
-    if (event.key === 'Enter') {
-        handleSearch();
-    }
-}
 
 // Calculate totals (ใช้ค่าจาก API ถ้ามี, fallback เป็นการคำนวณจาก items ที่โหลดมา)
 const totalAmount = computed(() => {
@@ -193,7 +189,6 @@ const totalLines = computed(() => {
     if (apiCount > 0) return apiCount;
     return items.value.length;
 });
-const showCartSearch = computed(() => toCartNumber(props.totalCartCount, 0) > 5 || !!props.searchQuery || !!localSearchQuery.value);
 
 const visibleStockIssueItems = computed(() => items.value.filter((item) => !props.isLoadingStock && isStockBlocked(item)));
 const visibleStockIssueCount = computed(() => visibleStockIssueItems.value.length);
@@ -205,7 +200,38 @@ const checkoutBlockMessage = computed(() => {
     if (hasVisibleStockIssues.value) return t('cartPage.mustFixStock', { count: visibleStockIssueCount.value });
     return '';
 });
-const isCheckoutDisabled = computed(() => props.checkoutLocked);
+const editingKey = ref(null);
+const savingQty = ref(false);
+const itemKey = item => JSON.stringify([item.guid_code, item.item_code, item.unit_code]);
+const isCheckoutDisabled = computed(() => props.checkoutLocked || !!editingKey.value || savingQty.value);
+async function saveDraft(item, qty) {
+    savingQty.value = true;
+    try {
+        return await props.saveQuantity({ ...item, qty });
+    } finally {
+        savingQty.value = false;
+    }
+}
+async function changeQuantity(item, delta) {
+    if (savingQty.value) return;
+    const current = toOrderQty(item.qty) || 1;
+    const next = Math.max(1, current + delta);
+    const limit = getMaxOrderQty(item);
+    if (next === current || (limit !== null && next > limit)) return;
+    await saveDraft(item, next);
+}
+function quantityInputKeydown(event) {
+    if (event.key === 'Enter') { event.target.blur(); return; }
+    if (!/^[0-9]$/.test(event.key) && !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.preventDefault();
+}
+async function commitQuantityInput(item, event) {
+    const requested = Number(String(event.target.value).trim());
+    const limit = getMaxOrderQty(item);
+    const next = Number.isSafeInteger(requested) && requested > 0 ? requested : 1;
+    const bounded = limit === null ? next : Math.min(next, limit);
+    event.target.value = String(bounded);
+    if (bounded !== toOrderQty(item.qty)) await saveDraft(item, bounded);
+}
 const checkoutButtonLabel = computed(() => {
     if (props.checkoutLocked) return t('cartPage.checkoutLocked');
     if (hasVisibleStockIssues.value) return t('cartPage.fixStockFirst');
@@ -274,73 +300,6 @@ function getMaxOrderQty(item) {
     return normalizeMaxOrderQty(item?.max_order_qty);
 }
 
-function isIncreaseQuantityDisabled(item) {
-    return isMaxOrderQtyReached(item) || isStockBlocked({ ...item, qty: toOrderQty(item.qty) + 1 });
-}
-
-function warnMaxAllowance(item) {
-    toast.add({
-        severity: 'warn',
-        summary: t('cartPage.stockNotEnough'),
-        detail: t('productDetail.maxAllowanceHint', { max: getMaxOrderQty(item), unit: item.unit_code || '' }),
-        life: 3000
-    });
-}
-
-// Handle quantity changes
-async function increaseQuantity(item) {
-    const previousQty = toOrderQty(item.qty) || 1;
-    try {
-        // ห้ามเกินจำนวนสั่งสูงสุดต่อคำสั่งซื้อ (REQ3)
-        const maxOrderQty = getMaxOrderQty(item);
-        if (maxOrderQty !== null && previousQty + 1 > maxOrderQty) {
-            warnMaxAllowance(item);
-            return;
-        }
-
-
-        // แปลงค่าเป็นตัวเลขก่อนบวก
-        const newQty = previousQty + 1;
-        item.qty = newQty;
-        emit('set-cart-changed');
-        await updateItemInCart(item);
-    } catch (error) {
-        console.error('Error updating quantity:', error);
-        toast.add({
-            severity: 'error',
-            summary: t('common.error'),
-            detail: t('cartPage.addQtyFailed'),
-            life: 1500
-        });
-        // แปลงค่าเป็นตัวเลขก่อนลบ
-        item.qty = previousQty;
-    }
-}
-
-async function decreaseQuantity(item) {
-    // แปลงค่าเป็นตัวเลขก่อนเปรียบเทียบ
-    const currentQty = toOrderQty(item.qty);
-    if (currentQty > 1) {
-        try {
-            // แปลงค่าเป็นตัวเลขก่อนลบ
-            const newQty = currentQty - 1;
-            item.qty = newQty;
-            emit('set-cart-changed');
-            await updateItemInCart(item);
-        } catch (error) {
-            console.error('Error updating quantity:', error);
-            toast.add({
-                severity: 'error',
-                summary: t('common.error'),
-                detail: t('cartPage.reduceQtyFailed'),
-                life: 1500
-            });
-            // แปลงค่าเป็นตัวเลขก่อนบวก
-            item.qty = currentQty;
-        }
-    }
-}
-
 // Update item quantity with specific value
 async function updateItemQuantity(item, newQty) {
     try {
@@ -373,10 +332,10 @@ async function updateItemInCart(item) {
 }
 
 // Remove item from cart
-async function removeItem(itemId) {
+async function removeItem(item) {
     try {
         // Remove from cart store
-        await cartStore.removeFromCart(itemId);
+        await cartStore.removeFromCart(item);
 
         // อัพเดต items ตามข้อมูลจาก store โดยตรง
         emit('refresh-cart');
@@ -514,7 +473,7 @@ function confirmRemoveItem(item) {
         acceptLabel: t('cartPage.removeAccept'),
         rejectLabel: t('common.cancel'),
         acceptClass: 'p-button-danger',
-        accept: () => removeItem(item.id)
+        accept: () => removeItem(item)
     });
 }
 
@@ -566,6 +525,7 @@ function handleImageError(event) {
 
 // Navigation
 async function proceedToCheckout() {
+    if (editingKey.value || savingQty.value) return;
     if (props.checkoutLocked) {
         toast.add({
             severity: 'warn',
@@ -664,52 +624,8 @@ function closeStockIssuesDialog() {
     emit('refresh-cart');
 }
 
-function validateQuantity(item) {
-    // ถ้าค่าว่างเปล่าหรือไม่ใช่ตัวเลข ให้กำหนดเป็น 1
-    let numValue = toOrderQty(item.qty);
-    if (numValue <= 0) {
-        item.qty = 1;
-        updateItemInCart(item);
-        return;
-    }
-
-    // แปลงให้เป็นตัวเลข
-    numValue = Math.floor(numValue);
-
-    // ตรวจสอบว่าไม่ต่ำกว่า 1
-    if (numValue < 1) {
-        item.qty = 1;
-        updateItemInCart(item);
-        return;
-    }
-
-
-    // จำกัดตามจำนวนสั่งสูงสุดต่อคำสั่งซื้อ (REQ3)
-    const maxOrderQty = getMaxOrderQty(item);
-    if (maxOrderQty !== null && numValue > maxOrderQty) {
-        warnMaxAllowance(item);
-        numValue = maxOrderQty;
-    }
-
-    // ตัดศูนย์นำหน้า
-    item.qty = numValue;
-
-    // อัพเดทสินค้า
-    emit('set-cart-changed');
-    updateItemInCart(item);
-}
-
-// ฟังก์ชันสำหรับจำกัดให้พิมพ์ได้เฉพาะตัวเลข
-function handleQuantityKeydown(event) {
-    // อนุญาตให้กดปุ่มตัวเลข 0-9 บนคีย์บอร์ดหลักหรือปุ่มตัวเลขด้านข้าง
-    const isNumber = /^[0-9]$/.test(event.key);
-    // อนุญาตให้กดปุ่ม backspace, delete, tab, arrows
-    const isControl = ['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key);
-
-    if (!isNumber && !isControl) {
-        event.preventDefault();
-    }
-}
+const checkoutFooter = ref(null);
+useCheckoutFooter(checkoutFooter);
 </script>
 
 <template>
@@ -723,41 +639,17 @@ function handleQuantityKeydown(event) {
 
     <!-- Cart content -->
     <div v-else class="cart-step-shell">
-        <div class="cart-toolbar">
-            <!-- Row 1: Title + Stats -->
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3" :class="{ 'mb-3': showCartSearch }">
-                <div>
-                    <p class="cart-toolbar-kicker">{{ t('cartPage.reviewBasket') }}</p>
-                    <h2 class="text-xl font-bold cart-toolbar-title">{{ t('cartPage.cartItems') }}</h2>
-                </div>
-
-                <div class="cart-toolbar-stats">
-                    <div class="cart-toolbar-stat">
-                        <span>{{ t('cartPage.productLines') }}</span>
-                        <strong>{{ t('cart.itemCount', { count: totalLines }) }}</strong>
-                        <small>{{ totalItems }} {{ t('common.piece') }}</small>
-                    </div>
-                </div>
+        <header class="cart-toolbar">
+            <div class="cart-title"><i class="pi pi-shopping-cart" aria-hidden="true"></i><h1>{{ t('cart.cart') }}</h1>
+                <span>{{ t('cartPage.summaryLine', { lines: totalLines, items: totalItems }) }}</span>
             </div>
-
-            <!-- Row 2: Search Box -->
-            <div v-if="showCartSearch" class="flex items-center gap-2">
-                <div class="relative flex-grow">
-                    <i class="pi pi-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"></i>
-                    <input
-                        type="text"
-                        v-model="localSearchQuery"
-                        :placeholder="t('cartPage.cartSearchPlaceholder')"
-                        class="cart-search-input w-full pl-10 pr-10 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-400"
-                        @keydown="handleSearchKeydown"
-                    />
-                    <button v-if="localSearchQuery" type="button" :aria-label="t('common.clearSearch')" @click="handleClearSearch" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
-                        <i class="pi pi-times-circle"></i>
-                    </button>
-                </div>
-                <Button icon="pi pi-search" aria-label="ค้นหาสินค้าในตะกร้า" class="cart-search-button" @click="handleSearch" :loading="isSearching" :disabled="isSearching" rounded />
-            </div>
-        </div>
+            <form class="cart-search" role="search" @submit.prevent="handleSearch">
+                <input type="search" v-model="localSearchQuery" :placeholder="t('cartPage.cartSearchPlaceholder')" :aria-label="t('cartPage.cartSearchPlaceholder')" />
+                <button v-if="localSearchQuery || searchQuery" type="button" :aria-label="t('common.clearSearch')" @click="handleClearSearch"><i class="pi pi-times"></i></button>
+                <button type="submit" :disabled="isSearching" :aria-label="t('common.search')"><i :class="isSearching ? 'pi pi-spin pi-spinner' : 'pi pi-search'"></i></button>
+            </form>
+            <Button icon="pi pi-trash" :label="t('cartPage.clearCart')" severity="secondary" text size="small" class="cart-clear" @click="confirmClearCart" />
+        </header>
 
         <!-- Search result info -->
         <div v-if="searchQuery" class="mb-4 p-3 search-result-chip rounded-lg flex items-center justify-between">
@@ -788,100 +680,60 @@ function handleQuantityKeydown(event) {
         <!-- Cart items -->
         <div v-if="items.length > 0" class="cart-review-layout">
             <section class="cart-items-panel">
-                <div class="cart-items-heading">
-                    <div>
-                        <span class="cart-section-eyebrow">{{ t('cartPage.productLines') }}</span>
-                        <h3>{{ t('cartPage.summaryLine', { lines: totalLines, items: totalItems }) }}</h3>
-                    </div>
-                    <Button icon="pi pi-trash" :label="t('cartPage.clearCart')" severity="secondary" text size="small" class="cart-clear-inline" @click="confirmClearCart" />
+                <div class="cart-column-head" aria-hidden="true">
+                    <span>{{ t('common.product') }}</span><span>{{ t('common.unit') }}</span><span>{{ t('common.price') }}</span>
+                    <span>{{ t('productDetail.stock') }}</span><span>{{ t('common.qty') }}</span><span>{{ t('common.amount') }}</span>
                 </div>
-
                 <div class="cart-items-stack">
-            <div v-for="item in items" :key="item.id">
-                <div class="cart-item-card rounded-xl" :class="{ 'cart-item-card--issue': !isLoadingStock && isStockBlocked(item) }">
-                    <div class="cart-item-inner">
-                        <!-- Product image — คลิกเพื่อเปิดหน้าสั่งสินค้า (รีวิว 260908 สไลด์ 5) -->
-                        <button type="button" class="cart-item-img-wrap cart-item-link" :aria-label="getItemDisplayName(item)" @click="openProductDetail(item)">
-                            <img :src="getProductImage(item)" :alt="item.item_code" class="w-full h-full object-contain" @error="handleImageError" />
-                        </button>
-
-                        <!-- Product info (left column) -->
-                        <div class="cart-item-info">
-                            <div class="cart-item-code-line">{{ item.item_code }}</div>
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <button type="button" class="cart-item-name cart-item-link" @click="openProductDetail(item)">{{ getItemDisplayName(item) }}</button>
-                                <span class="cart-unit-chip">{{ item.unit_code }}</span>
-                                <Tag v-if="isSetItem(item)" :value="t('cartPage.setTag')" severity="info" class="text-xs" />
-                                <Tag v-if="String(item.item_type) === '4' || item.sale_premium_code" value="โปรโมชันของแถม" severity="danger" icon="pi pi-gift" class="text-xs" />
-                                <Button
-                                    v-if="isSetItem(item) && cartStore.setItemsCache[item.item_code]?.length > 0"
-                                    :icon="isExpanded(item.item_code) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
-                                    text rounded size="small"
-                                    :aria-label="isExpanded(item.item_code) ? 'ซ่อนรายการสินค้าในชุด' : 'แสดงรายการสินค้าในชุด'"
-                                    @click="toggleSetItems(item.item_code)"
-                                    class="p-1"
-                                />
+                    <div v-for="item in items" :key="item.guid_code + ':' + item.item_code + ':' + item.unit_code" class="cart-line" :class="{ 'cart-line--issue': !isLoadingStock && isStockBlocked(item) }">
+                        <div class="cart-row">
+                            <div class="cart-product">
+                                <button type="button" @click="openProductDetail(item)"><img :src="getProductImage(item)" :alt="getItemDisplayName(item)" @error="handleImageError" /></button>
+                                <div><small>{{ item.item_code }}</small><button type="button" class="text-left font-semibold" @click="openProductDetail(item)">{{ getItemDisplayName(item) }}</button>
+                                    <small v-if="item.category">{{ item.category }}</small>
+                                    <Tag v-if="isSalePremiumItem(item)" :value="t('catalog.promotion')" severity="danger" icon="pi pi-gift" />
+                                    <Tag v-if="isSetItem(item)" :value="t('cartPage.setTag')" severity="info" />
+                                    <Button v-if="isSetItem(item) && cartStore.setItemsCache[item.item_code]?.length"
+                                        :icon="isExpanded(item.item_code) ? 'pi pi-chevron-up' : 'pi pi-chevron-down'" text rounded size="small"
+                                        :aria-expanded="isExpanded(item.item_code)" :aria-label="t('cartPage.setTag')" @click="toggleSetItems(item.item_code)" />
+                                </div>
                             </div>
-                            <div v-if="item.category" class="cart-item-category">{{ item.category }}</div>
-
-                            <!-- Stock badge -->
-                            <div v-if="isLoadingStock" class="cart-stock-badge cart-stock-badge--loading">
-                                <i class="pi pi-spin pi-spinner"></i> {{ t('cartPage.checkingStock') }}
+                            <span class="cart-unit">{{ item.unit_code }}</span>
+                            <span class="cart-price">฿{{ formatNumber(item.price) }}<small> / {{ item.unit_code }}</small><small v-if="unitRatioTextOf(item)" class="unit-ratio">{{ unitRatioTextOf(item) }}</small></span>
+                            <div class="cart-stock">
+                                <div v-if="isLoadingStock" class="cart-stock-badge cart-stock-badge--loading">
+                                    <i class="pi pi-spin pi-spinner"></i> {{ t('cartPage.checkingStock') }}
+                                </div>
+                                <div v-else-if="!isSalePremiumItem(item) && isOutOfStock(item)" class="cart-stock-badge cart-stock-badge--out">
+                                    <i class="pi pi-times-circle"></i> {{ t('cartPage.outOfStock') }}
+                                </div>
+                                <div v-else-if="!isSalePremiumItem(item) && isExceedingStock(item)" class="cart-stock-badge cart-stock-badge--warn">
+                                    <i class="pi pi-exclamation-triangle"></i> {{ t('cartPage.stockNotEnough') }} ({{ t('cartPage.stockBalance', { qty: formatQty(item.balance_qty), unit: item.unit_code }) }})
+                                </div>
+                                <div v-else-if="!isSalePremiumItem(item) && item.balance_qty !== undefined" class="cart-stock-badge cart-stock-badge--ok">
+                                    <i class="pi pi-box"></i> {{ t('cartPage.stockBalance', { qty: formatQty(item.balance_qty), unit: item.unit_code }) }}
+                                </div>
                             </div>
-                            <div v-else-if="!isSalePremiumItem(item) && isOutOfStock(item)" class="cart-stock-badge cart-stock-badge--out">
-                                <i class="pi pi-times-circle"></i> {{ t('cartPage.outOfStock') }}
-                            </div>
-                            <div v-else-if="!isSalePremiumItem(item) && isExceedingStock(item)" class="cart-stock-badge cart-stock-badge--warn">
-                                <i class="pi pi-exclamation-triangle"></i> {{ t('cartPage.stockNotEnough') }} ({{ t('cartPage.stockBalance', { qty: formatQty(item.balance_qty), unit: item.unit_code }) }})
-                            </div>
-                            <div v-else-if="!isSalePremiumItem(item) && item.balance_qty !== undefined" class="cart-stock-badge cart-stock-badge--ok">
-                                <i class="pi pi-box"></i> {{ t('cartPage.stockBalance', { qty: formatQty(item.balance_qty), unit: item.unit_code }) }}
-                            </div>
-                            <div v-if="!isLoadingStock && isStockBlocked(item)" class="cart-stock-action-row">
-                                <Button v-if="isExceedingStock(item)" :label="t('cartPage.adjustToStock')" icon="pi pi-check" size="small" text @click="adjustItemToAvailableStock(item)" />
-                                <Button v-else :label="t('cartPage.removeItem')" icon="pi pi-trash" severity="danger" size="small" text @click="confirmRemoveItem(item)" />
-                            </div>
-                            <div v-if="!isLoadingStock && isStockBlocked(item)" class="cart-stock-block-hint">
-                                <i class="pi pi-info-circle"></i>
-                                <span>{{ getStockBlockMessage(item) }}</span>
-                            </div>
-                        </div>
-
-                        <!-- Right column: price + qty + remove -->
-                        <div class="cart-item-right">
-                            <Button icon="pi pi-trash" :label="t('cartPage.removeItem')" severity="danger" text size="small" class="cart-item-remove" @click="confirmRemoveItem(item)" />
-
-                            <div class="cart-item-price-block">
-                                <span class="cart-item-total-price">฿{{ formatNumber(getLineTotal(item)) }}</span>
-                                <span class="cart-item-unit-price">฿{{ formatNumber(item.price) }} / {{ item.unit_code }}</span>
-                                <!-- ตัวคูณหน่วย เช่น "1 ลัง = 24 ชิ้น" (รีวิว 260908 สไลด์ 1) -->
-                                <span v-if="unitRatioTextOf(item)" class="cart-item-unit-ratio">{{ unitRatioTextOf(item) }}</span>
-                            </div>
-
                             <div class="cart-item-qty-row">
-                                <Button icon="pi pi-minus" text rounded size="small" class="qty-step-btn" :aria-label="`ลดจำนวน ${getItemDisplayName(item)}`" @click="decreaseQuantity(item)" :disabled="toOrderQty(item.qty) <= 1" />
-                                <input
-                                    type="text"
-                                    v-model="item.qty"
-                                    class="qty-input"
-                                    :aria-label="`จำนวน ${getItemDisplayName(item)}`"
-                                    @blur="validateQuantity(item)"
-                                    @keydown="handleQuantityKeydown($event)"
-                                    :class="{ 'qty-input--error': isStockBlocked(item) }"
-                                />
-                                <Button
-                                    icon="pi pi-plus"
-                                    text rounded size="small"
-                                    class="qty-step-btn"
+                                <Button icon="pi pi-minus" text rounded size="small" class="qty-step-btn"
+                                    :aria-label="`ลดจำนวน ${getItemDisplayName(item)}`" :disabled="savingQty || toOrderQty(item.qty) <= 1" @click="changeQuantity(item, -1)" />
+                                <input :key="`${itemKey(item)}:${item.qty}`" type="text" :value="toOrderQty(item.qty)" class="qty-input"
+                                    inputmode="numeric" :aria-label="`จำนวน ${getItemDisplayName(item)}`"
+                                    :disabled="savingQty" @keydown="quantityInputKeydown" @blur="commitQuantityInput(item, $event)" />
+                                <Button icon="pi pi-plus" text rounded size="small" class="qty-step-btn"
                                     :aria-label="`เพิ่มจำนวน ${getItemDisplayName(item)}`"
-                                    @click="increaseQuantity(item)"
-                                    :disabled="isIncreaseQuantityDisabled(item)"
-                                />
+                                    :disabled="savingQty || (getMaxOrderQty(item) !== null && toOrderQty(item.qty) >= getMaxOrderQty(item))"
+                                    @click="changeQuantity(item, 1)" />
                             </div>
+                            <strong class="cart-subtotal">฿{{ formatNumber(getLineTotal(item)) }}</strong>
+                            <Button icon="pi pi-trash" :aria-label="t('cartPage.removeItem') + ' ' + getItemDisplayName(item)" severity="danger" text size="small" class="cart-remove" @click="confirmRemoveItem(item)" />
                         </div>
-                    </div>
-                </div>
-
+                        <div v-if="!isLoadingStock && isStockBlocked(item)" class="cart-issue-action">
+                            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+                            <span>{{ getStockBlockMessage(item) }}</span>
+                            <Button v-if="isExceedingStock(item)" :label="t('cartPage.adjustToStock')" icon="pi pi-check" size="small" outlined @click="adjustItemToAvailableStock(item)" />
+                            <Button v-else :label="t('cartPage.removeItem')" icon="pi pi-trash" size="small" outlined @click="confirmRemoveItem(item)" />
+                        </div>
                 <!-- รายการสินค้าย่อย (expandable) -->
                 <div v-if="isSetItem(item) && isExpanded(item.item_code)" class="ml-8 mt-2 space-y-2 border-l-2 border-primary-200 pl-4 mb-4">
                     <div v-for="(setItem, setIndex) in cartStore.setItemsCache[item.item_code]" :key="getSetItemKey(setItem, item, setIndex)" class="flex items-center gap-2 text-sm set-item-row p-2 rounded">
@@ -923,22 +775,12 @@ function handleQuantityKeydown(event) {
         <div v-if="isChangingPage" class="flex justify-center py-4">
             <i class="pi pi-spin pi-spinner text-2xl text-primary-500"></i>
         </div>
+                <p v-if="checkoutBlockMessage" class="mobile-cart-warning">{{ checkoutBlockMessage }}</p>
             </section>
 
-            <aside class="cart-summary-card">
-                <p class="cart-summary-kicker">{{ t('cartPage.reviewBasket') }}</p>
-                <h3>{{ t('common.total') }}</h3>
-                <div class="cart-summary-total">฿{{ formatNumber(totalAmount) }}</div>
-                <div class="cart-summary-lines">
-                    <div>
-                        <span>{{ t('cartPage.productLines') }}</span>
-                        <strong>{{ t('cart.itemCount', { count: totalLines }) }}</strong>
-                    </div>
-                    <div>
-                        <span>{{ t('common.piece') }}</span>
-                        <strong>{{ totalItems }} {{ t('common.piece') }}</strong>
-                    </div>
-                </div>
+            <aside ref="checkoutFooter" class="cart-summary-card mobile-checkout-footer">
+                <div class="cart-sum checkout-total"><small>{{ t('common.total') }}</small><strong>฿{{ formatNumber(totalAmount) }}</strong></div>
+                <div class="cart-summary-count">{{ t('cartPage.summaryLine', { lines: totalLines, items: totalItems }) }}</div>
                 <div v-if="checkoutBlockMessage" class="cart-summary-warning">
                     <i class="pi pi-exclamation-triangle"></i>
                     <span>{{ checkoutBlockMessage }}</span>
@@ -954,9 +796,9 @@ function handleQuantityKeydown(event) {
                     @click="proceedToCheckout"
                     :loading="isValidatingStock"
                     :disabled="isCheckoutDisabled"
-                    class="footer-checkout-btn cart-summary-checkout"
+                    class="footer-checkout-btn cart-summary-checkout checkout-primary"
                 />
-                <Button :label="t('cartPage.continueShopping')" icon="pi pi-arrow-left" outlined severity="secondary" class="cart-summary-back" @click="emit('go-to-shop')" />
+                <Button :label="t('cartPage.continueShopping')" icon="pi pi-arrow-left" outlined severity="secondary" class="cart-summary-back checkout-secondary" @click="emit('go-to-shop')" />
             </aside>
         </div>
 
@@ -1037,887 +879,121 @@ function handleQuantityKeydown(event) {
 
 <style scoped>
 .cart-step-shell {
-    background: linear-gradient(180deg, var(--market-card-bg, #fffefb) 0%, var(--market-surface-soft, #fdf9f1) 100%);
-    border: 1px solid var(--market-card-border, #efe3c8);
-    border-radius: 1.4rem;
-    padding: 1.15rem;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    --line: var(--market-card-border, #dce7df);
+    --surface: var(--market-card-bg, white);
+    --muted: var(--market-muted, #586761);
+    --green: var(--market-primary, #087d55);
+    color: var(--market-text);
 }
-
-.cart-toolbar {
-    background: linear-gradient(135deg, var(--market-surface-soft, #fff7e7) 0%, var(--market-card-bg, #fffefb) 100%);
-    border: 1px solid var(--market-card-border, #ead9b5);
-    border-radius: 1.1rem;
-    padding: 1rem;
-    box-shadow: 0 14px 24px var(--market-shadow, rgba(140, 111, 53, 0.1));
-}
-
-.cart-toolbar-kicker {
-    margin: 0 0 0.25rem;
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    font-size: 0.68rem;
-    font-weight: 700;
-    color: var(--market-primary, #b28b46);
-}
-
-.cart-toolbar-title {
-    color: var(--market-text, #5b4a27);
-}
-
-.cart-toolbar-stats {
+.cart-toolbar, .cart-title, .cart-search, .cart-product, .cart-stock-alert, .cart-stock-alert > div, .cart-issue-action {
     display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
+    align-items: center;
+    gap: .6rem;
 }
-
-.cart-toolbar-stat {
-    min-width: 7.5rem;
-    padding: 0.7rem 0.9rem;
-    border-radius: 0.95rem;
-    background: color-mix(in srgb, var(--market-card-bg, #fff) 82%, transparent);
-    border: 1px solid var(--market-card-border, #ead9b5);
+.cart-toolbar { flex-wrap: wrap; gap: .7rem 1rem; margin-bottom: 1rem; }
+.cart-title h1 { margin: 0; font-size: 1.25rem; font-weight: 750; }
+.cart-title > i, .cart-product small:first-child { color: var(--green); }
+.cart-title span { padding-inline-start: .65rem; border-inline-start: 1px solid var(--line); color: var(--muted); }
+.cart-search { flex: 1 1 13rem; max-width: 36rem; margin-inline-start: auto; gap: 0; padding-inline: .65rem .15rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--surface); }
+.cart-search:focus-within { outline: 2px solid var(--green); }
+.cart-search input { flex: 1; width: 0; min-height: 2.65rem; color: inherit; background: transparent; outline: none; }
+.cart-search input::-webkit-search-cancel-button { display: none; }
+.cart-search button { min-width: 2.5rem; min-height: 2.5rem; color: var(--green); cursor: pointer; }
+.cart-review-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(12rem, 19%); gap: 1rem; align-items: start; }
+.cart-items-panel, .cart-summary-card { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: .85rem; }
+.cart-column-head, .cart-row {
     display: grid;
-    gap: 0.15rem;
-}
-
-.cart-toolbar-stat span {
-    font-size: 0.72rem;
-    color: var(--market-muted, #9b8a67);
-}
-
-.cart-toolbar-stat strong {
-    color: var(--market-text, #5b4a27);
-}
-
-.cart-toolbar-stat small {
-    font-size: 0.7rem;
-    color: var(--market-primary, #b28b46);
-    line-height: 1.15;
-}
-
-/* ── Cart Item Card ── */
-.cart-item-card {
-    background: linear-gradient(180deg, var(--market-card-bg, #fffdf8) 0%, var(--market-surface-soft, #fffaf0) 100%);
-    border: 1px solid var(--market-card-border, #efe3c8);
-    border-left: 4px solid var(--market-primary, #d9b86c);
-    box-shadow: 0 2px 12px var(--market-shadow, rgba(140, 111, 53, 0.07));
-    transition: box-shadow 0.15s ease;
-}
-
-.cart-item-card:hover {
-    box-shadow: 0 4px 18px var(--market-shadow, rgba(140, 111, 53, 0.13));
-}
-
-.cart-item-card--issue {
-    border-left-color: #f97316;
-    box-shadow:
-        0 2px 14px rgba(249, 115, 22, 0.12),
-        0 0 0 1px rgba(249, 115, 22, 0.12);
-}
-
-.cart-item-inner {
-    display: grid;
-    grid-template-columns: 5rem 1fr auto;
-    gap: 1rem;
-    align-items: center;
-    padding: 0.85rem 1rem;
-}
-
-/* Product thumbnail */
-.cart-item-img-wrap {
-    width: 5rem;
-    height: 5rem;
-    flex-shrink: 0;
-    overflow: hidden;
-    border-radius: 0.6rem;
-    border: 1px solid var(--market-card-border, #ebddbf);
-    background: var(--market-card-bg, #fffefb);
-}
-
-/* Info column */
-.cart-item-info {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-}
-
-.cart-item-code-line {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    color: var(--market-primary, #b28b46);
-    text-transform: uppercase;
-}
-
-/* ชื่อ/รูปที่กดได้ — ต้องดูเหมือนของเดิม ไม่ใช่ปุ่ม */
-.cart-item-link {
-    border: none;
-    background: none;
-    padding: 0;
-    font: inherit;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.cart-item-link:hover {
-    text-decoration: underline;
-}
-
-.cart-item-img-wrap.cart-item-link:hover {
-    text-decoration: none;
-    opacity: 0.85;
-}
-
-.cart-item-name {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--market-text, #3d2f14);
-    line-height: 1.3;
-}
-
-.cart-unit-chip {
-    display: inline-flex;
-    align-items: center;
-    min-height: 1.35rem;
-    padding: 0.15rem 0.45rem;
-    border-radius: 999px;
-    background: var(--market-primary-soft, #fff3d0);
-    border: 1px solid color-mix(in srgb, var(--market-primary, #8a5e1a) 22%, var(--market-card-border, #ead39a));
-    color: var(--market-primary, #8a5e1a);
-    font-size: 0.72rem;
-    font-weight: 700;
-    white-space: nowrap;
-}
-
-.cart-item-category {
-    font-size: 0.72rem;
-    color: var(--market-muted, #9b8a67);
-}
-
-/* Stock badges */
-.cart-stock-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-size: 0.72rem;
-    font-weight: 500;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-    width: fit-content;
-    margin-top: 0.15rem;
-}
-
-.cart-stock-badge--loading {
-    background: #f3f4f6;
-    color: #9ca3af;
-}
-.cart-stock-badge--out {
-    background: #fee2e2;
-    color: #dc2626;
-}
-.cart-stock-badge--warn {
-    background: #fff3cd;
-    color: #b45309;
-}
-.cart-stock-badge--preorder {
-    background: #eff6ff;
-    color: #1d4ed8;
-}
-.cart-stock-badge--ok {
-    background: #f0fdf4;
-    color: #16a34a;
-}
-
-.cart-stock-action-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    margin-top: 0.2rem;
-}
-
-.cart-stock-block-hint {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.35rem;
-    max-width: 28rem;
-    margin-top: 0.25rem;
-    color: #9a3412;
-    font-size: 0.76rem;
-    line-height: 1.35;
-}
-
-.cart-stock-block-hint i {
-    flex-shrink: 0;
-    margin-top: 0.08rem;
-    color: #f97316;
-}
-
-/* Right column */
-.cart-item-right {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.5rem;
-    min-width: 9rem;
-}
-
-.cart-item-remove {
-    margin-bottom: -0.25rem;
-}
-
-.cart-item-price-block {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 0.1rem;
-}
-
-.cart-item-total-price {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--market-text, #5b4a27);
-    line-height: 1;
-}
-
-.cart-item-unit-ratio {
-    font-size: 0.7rem;
-    color: var(--market-muted, #9a8f7a);
-    line-height: 1.3;
-}
-
-.cart-item-unit-price {
-    font-size: 0.72rem;
-    color: var(--market-muted, #9b8a67);
-}
-
-/* Qty control */
-.cart-item-qty-row {
-    display: flex;
-    align-items: center;
-    gap: 0.15rem;
-    background: color-mix(in srgb, var(--market-card-bg, #fff) 78%, transparent);
-    border: 1px solid var(--market-card-border, #ead9b5);
-    border-radius: 999px;
-    padding: 0.1rem 0.25rem;
-}
-
-.qty-step-btn {
-    color: var(--market-primary, #7b5f2a) !important;
-    width: 1.75rem !important;
-    height: 1.75rem !important;
-}
-
-.qty-input {
-    width: 2.25rem;
-    text-align: center;
-    font-size: 0.9rem;
-    font-weight: 600;
-    border: none;
-    background: transparent;
-    outline: none;
-    color: var(--market-text, #3d2f14);
-}
-
-.qty-input--error {
-    color: #dc2626;
-}
-
-/* Search */
-.search-result-chip {
-    background: var(--market-surface-soft, #f9f2e1);
-    border: 1px solid var(--market-card-border, #ebddbf);
-}
-
-.cart-stock-alert {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.85rem;
-    padding: 0.8rem 0.95rem;
-    border-radius: 1rem;
-    border: 1px solid rgba(249, 115, 22, 0.28);
-    background: linear-gradient(135deg, rgba(255, 247, 237, 0.96), rgba(255, 251, 235, 0.96));
-    color: #92400e;
-    box-shadow: 0 10px 20px rgba(249, 115, 22, 0.08);
-}
-
-.cart-stock-alert > div {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 0.55rem;
-    row-gap: 0.1rem;
-    align-items: center;
-    min-width: 0;
-}
-
-.cart-stock-alert i {
-    grid-row: 1 / 3;
-    color: #f97316;
-}
-
-.cart-stock-alert strong {
-    font-size: 0.9rem;
-    color: #7c2d12;
-    line-height: 1.2;
-}
-
-.cart-stock-alert span {
-    font-size: 0.78rem;
-    color: #a16207;
-    line-height: 1.25;
-}
-
-.cart-search-input {
-    border-color: var(--market-card-border, #ead9b5);
-    background: color-mix(in srgb, var(--market-card-bg, #fff) 95%, transparent);
-    color: var(--market-text, #3d2f14);
-}
-
-.cart-search-button {
-    flex-shrink: 0;
-}
-
-/* Set items expand */
-.set-item-row {
-    background: var(--market-surface-soft, #fdf7ea);
-    border: 1px dashed var(--market-card-border, #e6d3ac);
-}
-
-/* Stack */
-.cart-items-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-/* โหลดต่อเนื่อง */
-.cart-load-more {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 2.75rem;
-    padding: 0.75rem 0 0.25rem;
-}
-
-.cart-load-more__spinner {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: var(--market-muted, #64748b);
-    font-size: 0.85rem;
-}
-
-.cart-load-more__btn {
-    border: 1px solid var(--market-card-border, #e2e8f0);
-    background: transparent;
-    color: var(--market-muted, #64748b);
-    border-radius: 999px;
-    padding: 0.45rem 1.1rem;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-}
-
-.cart-load-more__btn:hover {
-    background: var(--market-surface-soft, #f8fafc);
-}
-
-/* Action bar */
-.action-summary-bar {
-    background: var(--market-surface-soft, #fffaf0);
-    border: 1px solid var(--market-card-border, #efe3c8);
-    border-radius: 1rem;
-    padding: 0.9rem 1.1rem;
-}
-
-.footer-actions {
-    position: sticky;
-    bottom: 0.75rem;
-    z-index: 8;
-    gap: 0.85rem;
-    padding: 0.75rem;
-    border: 1px solid var(--market-card-border, #efe3c8);
-    border-radius: 1rem;
-    background: color-mix(in srgb, var(--market-surface-soft, #fffaf0) 96%, transparent);
-    box-shadow: 0 14px 28px var(--market-shadow, rgba(91, 74, 39, 0.16));
-    backdrop-filter: blur(10px);
-}
-
-.footer-summary-mini {
-    margin-left: auto;
-    display: grid;
-    gap: 0.1rem;
-    text-align: right;
-    color: var(--market-text, #5b4a27);
-}
-
-.footer-summary-mini span,
-.footer-summary-mini small {
-    font-size: 0.76rem;
-    color: var(--market-muted, #9b8a67);
-    line-height: 1.2;
-}
-
-.footer-summary-mini strong {
-    font-size: 1.12rem;
-    line-height: 1.1;
-    color: var(--market-primary, #8a5e1a);
-}
-
-.footer-summary-mini small {
-    color: #b45309;
-    max-width: 18rem;
-}
-
-:deep(.footer-back-btn.p-button) {
-    color: var(--market-muted, #9b8a67);
-    font-size: 0.88rem;
-    padding: 0.5rem 0.75rem;
-}
-:deep(.footer-back-btn.p-button:hover) {
-    color: var(--market-text, #5b4a27);
-    background: var(--market-surface-soft, #fdf7ea);
-}
-
-:deep(.footer-checkout-btn.p-button) {
-    background: linear-gradient(120deg, var(--market-primary, #e6c885) 0%, color-mix(in srgb, var(--market-primary, #d3af67) 74%, var(--market-accent, #f97316)) 100%);
-    border-color: var(--market-primary, #c8a45d);
-    color: var(--market-card-bg, #4a3300);
-    font-size: 0.95rem;
-    font-weight: 700;
-    padding: 0.65rem 1.4rem;
-    box-shadow: 0 3px 10px color-mix(in srgb, var(--market-primary, #c89b28) 30%, transparent);
-    letter-spacing: 0.01em;
-    border-radius: 8px;
-}
-:deep(.footer-checkout-btn.p-button:hover:not(:disabled)) {
-    background: linear-gradient(120deg, color-mix(in srgb, var(--market-primary, #ddbf79) 90%, #fff) 0%, var(--market-primary, #c8a45d) 100%);
-    box-shadow: 0 4px 14px color-mix(in srgb, var(--market-primary, #c89b28) 38%, transparent);
-    transform: translateY(-1px);
-}
-:deep(.footer-checkout-btn.p-button:disabled) {
-    opacity: 0.55;
-}
-
-/* Primary buttons */
-:deep(.cart-step-shell .p-button:not(.p-button-text):not(.p-button-outlined)) {
-    background: linear-gradient(120deg, var(--market-primary, #e6c885) 0%, color-mix(in srgb, var(--market-primary, #d3af67) 76%, var(--market-accent, #f97316)) 100%);
-    border-color: var(--market-primary, #d3af67);
-    color: var(--market-card-bg, #5b4a27);
-}
-
-:deep(.cart-step-shell .p-button:not(.p-button-text):not(.p-button-outlined):hover) {
-    background: linear-gradient(120deg, color-mix(in srgb, var(--market-primary, #ddbf79) 90%, #fff) 0%, var(--market-primary, #c8a45d) 100%);
-    border-color: var(--market-primary, #c8a45d);
-}
-
-/* Toolbar stat highlight */
-.cart-toolbar-stat--highlight {
-    background: linear-gradient(135deg, var(--market-primary-soft, #fff3d0) 0%, var(--market-accent-soft, #fde9a8) 100%) !important;
-    border-color: var(--market-primary, #d9b86c) !important;
-}
-
-.cart-toolbar-stat--highlight strong {
-    color: var(--market-primary, #8a5e1a);
-    font-size: 1rem;
-}
-
-.cart-step-shell {
-    background: color-mix(in srgb, var(--market-card-bg, #fff) 94%, var(--market-surface-soft, #f8fafc));
-    border-color: color-mix(in srgb, var(--market-card-border, #e2e8f0) 82%, transparent);
-    border-radius: var(--market-radius-lg, 18px);
-    padding: 1rem;
-    box-shadow: 0 16px 36px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.1)) 70%, transparent);
-}
-
-.cart-toolbar {
-    background: var(--market-card-bg, #fff);
-    border-color: color-mix(in srgb, var(--market-card-border, #e2e8f0) 80%, transparent);
-    border-radius: var(--market-radius-md, 14px);
-    box-shadow: none;
-}
-
-.cart-toolbar-stat {
-    border-radius: var(--market-radius-md, 14px);
-}
-
-.cart-review-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(18rem, 21rem);
-    gap: 1rem;
-    align-items: start;
-}
-
-.cart-items-panel,
-.cart-summary-card {
-    background: var(--market-card-bg, #fff);
-    border: 1px solid color-mix(in srgb, var(--market-card-border, #e2e8f0) 86%, transparent);
-    border-radius: var(--market-radius-lg, 18px);
-    box-shadow: 0 10px 24px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.08)) 62%, transparent);
-}
-
-.cart-items-panel {
-    padding: 1rem;
-    min-width: 0;
-}
-
-.cart-items-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding-bottom: 0.9rem;
-    margin-bottom: 0.9rem;
-    border-bottom: 1px solid color-mix(in srgb, var(--market-card-border, #e2e8f0) 78%, transparent);
-}
-
-.cart-section-eyebrow,
-.cart-summary-kicker {
-    display: block;
-    margin-bottom: 0.2rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 0.67rem;
-    font-weight: 800;
-    color: var(--market-primary, #2563eb);
-}
-
-.cart-items-heading h3,
-.cart-summary-card h3 {
-    margin: 0;
-    color: var(--market-text, #0f172a);
-    font-size: 1.05rem;
-    font-weight: 800;
-}
-
-:deep(.cart-clear-inline.p-button) {
-    color: var(--market-muted, #64748b);
-    white-space: nowrap;
-}
-
-.cart-summary-card {
-    position: sticky;
-    top: 5.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.95rem;
-    padding: 1rem;
-}
-
-.cart-summary-total {
-    color: var(--market-primary, #2563eb);
-    font-size: clamp(1.75rem, 4vw, 2.25rem);
-    font-weight: 900;
-    line-height: 1;
-}
-
-.cart-summary-lines {
-    display: grid;
-    gap: 0.6rem;
-    padding: 0.85rem;
-    border-radius: var(--market-radius-md, 14px);
-    background: color-mix(in srgb, var(--market-surface-soft, #f8fafc) 88%, transparent);
-}
-
-.cart-summary-lines div {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    color: var(--market-muted, #64748b);
-    font-size: 0.85rem;
-}
-
-.cart-summary-lines strong {
-    color: var(--market-text, #0f172a);
-    font-weight: 800;
-    text-align: right;
-}
-
-.cart-summary-warning,
-.cart-summary-preorder {
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
-    padding: 0.75rem;
-    border-radius: var(--market-radius-md, 14px);
-    font-size: 0.83rem;
-    line-height: 1.35;
-}
-
-.cart-summary-warning {
-    background: #fff7ed;
-    color: #9a3412;
-}
-
-.cart-summary-preorder {
-    background: #eff6ff;
-    color: #1d4ed8;
-}
-
-.cart-summary-checkout,
-.cart-summary-back {
-    width: 100%;
-    justify-content: center;
-}
-
-.cart-item-card {
-    overflow: hidden;
-    border: 1px solid color-mix(in srgb, var(--market-card-border, #e2e8f0) 88%, transparent);
-    border-left: 0;
-    border-radius: var(--market-radius-md, 14px);
-    background: var(--market-card-bg, #fff);
-    box-shadow: 0 4px 14px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.07)) 64%, transparent);
-}
-
-.cart-item-card:hover {
-    box-shadow: 0 10px 24px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.11)) 78%, transparent);
-}
-
-.cart-item-card--issue {
-    border-color: rgba(249, 115, 22, 0.36);
-    box-shadow:
-        0 8px 22px rgba(249, 115, 22, 0.12),
-        inset 4px 0 0 #f97316;
-}
-
-.cart-item-inner {
-    grid-template-columns: 6.25rem minmax(0, 1fr) minmax(10.5rem, auto);
-    gap: 1rem;
-    padding: 1rem;
-}
-
-.cart-item-img-wrap {
-    width: 6.25rem;
-    height: 6.25rem;
-    border-radius: var(--market-radius-sm, 10px);
-    background: color-mix(in srgb, var(--market-surface-soft, #f8fafc) 70%, #fff);
-}
-
-.cart-item-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-}
-
-.cart-item-name {
-    font-size: 1rem;
-    font-weight: 800;
-}
-
-.cart-item-right {
-    min-width: 10.5rem;
-    gap: 0.6rem;
-}
-
-:deep(.cart-item-remove.p-button) {
-    align-self: flex-end;
-    color: #dc2626;
-    padding: 0.25rem 0.35rem;
-}
-
-.cart-item-total-price {
-    font-size: 1.22rem;
-    font-weight: 900;
-}
-
-.cart-item-qty-row {
-    gap: 0.25rem;
-    padding: 0.22rem 0.35rem;
-}
-
-.qty-step-btn {
-    width: 2rem !important;
-    height: 2rem !important;
-}
-
-.qty-input {
-    width: 2.75rem;
-    font-size: 1rem;
-}
-
-.set-items-panel {
-    margin: 0.5rem 0 0.75rem 1.25rem;
-    padding-left: 0.8rem;
-    border-left: 2px solid color-mix(in srgb, var(--market-primary, #2563eb) 30%, transparent);
-}
-
-.set-item-row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.55rem;
-    border-radius: var(--market-radius-sm, 10px);
-}
-
-.set-item-thumb {
-    width: 2rem;
-    height: 2rem;
-    flex-shrink: 0;
-}
-
-.set-item-qty {
-    color: var(--market-muted, #64748b);
-    flex-shrink: 0;
-    font-size: 0.82rem;
-    text-align: right;
-}
-
-.set-item-qty span {
-    color: color-mix(in srgb, var(--market-muted, #64748b) 70%, transparent);
-}
-
-/* Reduced chrome: keep only product cards and the order summary as real cards. */
-.cart-step-shell {
-    background: transparent;
-    border: 0;
-    border-radius: 0;
-    padding: 0;
-    box-shadow: none;
-}
-
-.cart-toolbar {
-    background: transparent;
-    border: 0;
-    border-radius: 0;
-    padding: 0 0 0.9rem;
-    box-shadow: none;
-}
-
-.cart-toolbar-stats {
-    display: none;
-}
-
-.cart-toolbar-kicker {
-    letter-spacing: 0.08em;
-}
-
-.cart-review-layout {
-    gap: 1.25rem;
-}
-
-.cart-items-panel {
-    background: transparent;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    padding: 0;
-}
-
-.cart-items-heading {
-    padding: 0 0 0.75rem;
-    margin-bottom: 0.75rem;
-    border-bottom: 1px solid color-mix(in srgb, var(--market-card-border, #e2e8f0) 70%, transparent);
-}
-
-.cart-section-eyebrow,
-.cart-summary-kicker {
-    letter-spacing: 0.08em;
-}
-
-.cart-item-card {
-    border-color: color-mix(in srgb, var(--market-card-border, #e2e8f0) 72%, transparent);
-    box-shadow: 0 6px 18px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.08)) 50%, transparent);
-}
-
-.cart-summary-card {
-    border-color: color-mix(in srgb, var(--market-card-border, #e2e8f0) 72%, transparent);
-    box-shadow: 0 10px 24px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.08)) 58%, transparent);
-}
-
-.cart-summary-lines {
-    background: transparent;
-    border-top: 1px solid color-mix(in srgb, var(--market-card-border, #e2e8f0) 70%, transparent);
-    border-bottom: 1px solid color-mix(in srgb, var(--market-card-border, #e2e8f0) 70%, transparent);
-    border-radius: 0;
-    padding: 0.75rem 0;
-}
-
-/* Responsive */
-@media (max-width: 1024px) {
-    .cart-review-layout {
-        grid-template-columns: 1fr;
-    }
-
-    /* จอแคบ: การ์ดสรุปตกลงมาต่อท้ายลิสต์ ถ้าปล่อยเป็น static ผู้ใช้ต้องเลื่อน
-       ผ่านสินค้าทั้งตะกร้าถึงจะเห็นยอดรวม — รีวิว 260908 สไลด์ 4 สั่งให้ freeze ไว้
-       ใช้ sticky bottom แทน fixed เพื่อไม่ต้องจองพื้นที่ท้ายหน้าและไม่ทับ footer อื่น */
+    grid-template-columns: minmax(9rem, 2fr) minmax(2.6rem, .48fr) minmax(4.5rem, .7fr) minmax(5.3rem, .9fr) 7rem minmax(5rem, .75fr) 2rem;
+    align-items: center; gap: .45rem; padding: .75rem;
+}
+.cart-column-head { font-size: .82rem; font-weight: 650; color: var(--muted); background: var(--market-primary-soft, #edf6f0); border-radius: .85rem .85rem 0 0; }
+.cart-column-head > :nth-child(5) { text-align: center; }
+.cart-column-head > :nth-child(6), .cart-subtotal { text-align: end; }
+.cart-line + .cart-line { border-top: 1px solid var(--line); }
+.cart-line:last-child { border-radius: 0 0 .85rem .85rem; }
+.cart-line--issue, .cart-stock-alert { background: #fff7e8; }
+.cart-product { min-width: 0; overflow-wrap: anywhere; }
+.cart-product img { width: 3rem; height: 3rem; flex: none; object-fit: contain; }
+.cart-product small, .cart-product strong { display: block; }
+.cart-product small { color: var(--muted); font-size: .78rem; }
+.cart-product strong { font-weight: 650; line-height: 1.4; }
+.cart-unit, .cart-stock, .cart-price { font-size: .86rem; overflow-wrap: anywhere; }
+.cart-price small { display: none; }
+.cart-stock-badge { line-height: 1.4; }
+.cart-stock-badge--ok { color: #087247; }
+.cart-stock-badge--preorder, .cart-summary-preorder { color: #514892; }
+.cart-stock-badge--warn, .cart-stock-badge--out, .cart-summary-warning { color: #92480d; }
+.cart-stock-alert, .cart-issue-action { flex-wrap: wrap; color: #794113; }
+.cart-stock-alert { justify-content: space-between; border: 1px solid #e9c38c; padding: .5rem .8rem; border-radius: .65rem; }
+.cart-stock-alert > div { flex-wrap: wrap; }
+.cart-issue-action { padding: .45rem .8rem; background: #fff0d6; border-inline-start: 3px solid #ce811d; }
+.cart-item-qty-row { display: inline-flex; align-items: center; justify-self: start; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; }
+.cart-item-qty-row :deep(.p-button) { width: 2.1rem; height: 2.25rem; padding: 0; color: var(--green); }
+.qty-input { width: 2.5rem; min-width: 0; text-align: center; color: inherit; background: transparent; }
+.qty-input--error { color: #9c371a; }
+.cart-subtotal, .cart-price, .cart-sum { font-variant-numeric: tabular-nums; }
+.cart-remove { justify-self: end; }
+.cart-summary-card { position: sticky; top: 8rem; display: grid; gap: .7rem; padding: 1rem; }
+.cart-sum small, .cart-sum strong { display: block; }
+.cart-sum strong { color: var(--green); font-size: clamp(1.3rem, 2vw, 1.85rem); line-height: 1.3; }
+.cart-summary-count, .cart-page-number { color: var(--muted); font-size: .85rem; }
+.cart-summary-warning, .cart-summary-preorder { display: flex; gap: .5rem; align-items: baseline; font-size: .87rem; }
+.cart-summary-checkout:not(:disabled) { background: var(--green); color: white; }
+.cart-pagination { flex-wrap: wrap; }
+
+@media (max-width: 900px) {
+    .cart-review-layout { display: flex; flex-direction: column; align-items: stretch; gap: .65rem; }
+    .cart-column-head { display: none; }
+    .cart-items-panel { border: 0; background: transparent; }
+    .cart-items-stack { display: grid; gap: .55rem; }
+    .cart-items-stack .cart-line { border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }
+    .cart-items-stack .cart-line--issue { background: #fff7e8; border-color: #e9c38c; }
+    .cart-row { grid-template-columns: minmax(0, 1fr) auto 2.3rem; grid-template-areas: "product product remove" "price stock stock" "qty total total"; gap: .3rem .55rem; }
+    .cart-product { grid-area: product; }
+    .cart-unit { display: none; }
+    .cart-price { grid-area: price; color: var(--muted); }
+    .cart-price small { display: inline; }
+    .cart-stock { grid-area: stock; text-align: end; max-width: 12rem; }
+    .cart-item-qty-row { grid-area: qty; }
+    .cart-subtotal { grid-area: total; }
+    .cart-remove { grid-area: remove; }
+    .cart-issue-action { border-radius: 0 0 .75rem .75rem; }
     .cart-summary-card {
-        position: sticky;
-        top: auto;
-        bottom: calc(var(--app-bottomnav-h, 0px) + var(--app-safe-bottom, 0px));
-        z-index: 20;
-        box-shadow: 0 -10px 26px color-mix(in srgb, var(--market-shadow, rgba(15, 23, 42, 0.12)) 70%, transparent);
+        top: auto; bottom: 0; z-index: 4;
+        grid-template-columns: minmax(0,1fr) auto; align-items: center;
+        gap: .35rem .7rem; padding: .55rem .8rem;
+        box-shadow: 0 -3px 12px rgb(20 50 35 / 8%);
     }
-
-    /* ยอดรวมกับปุ่มต้องเห็นเสมอ ส่วนรายละเอียดยิบย่อยยุบได้ */
-    .cart-summary-kicker,
-    .cart-summary-back {
-        display: none;
-    }
-
-    .cart-summary-card h3 {
-        font-size: 0.9rem;
-    }
+    .cart-sum { grid-column: 1; grid-row: 1; }
+    .cart-summary-checkout { grid-column: 2; grid-row: 1; }
+    .cart-summary-count { display: none; }
+    .cart-summary-warning, .cart-summary-preorder, .cart-page-number { grid-column: 1 / -1; }
+    .cart-summary-back { grid-column: 1 / -1; justify-self: center; min-height: 2rem; padding: .2rem .6rem; }
 }
-
-@media (max-width: 640px) {
+@media (max-width: 900px) {
+    .cart-step-shell { padding-bottom: calc(var(--checkout-footer-height, 70px) + 1rem); }
     .cart-toolbar {
-        padding: 0.85rem;
+        position: sticky;
+        top: 0;
+        z-index: 6;
+        padding-block: .45rem;
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
     }
+    .cart-summary-warning, .cart-summary-preorder { overflow-wrap: anywhere; }
+}
+@media (max-width: 640px) {
+    .cart-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem; margin-bottom: .65rem; }
+    .cart-title { grid-column: 1 / -1; }
+    .cart-search { width: 100%; max-width: none; }
+    .cart-clear { padding-inline: .35rem; }
+}
 
-    .cart-toolbar-stats {
-        width: 100%;
-    }
-
-    .cart-toolbar-stat {
-        flex: 1 1 0;
-    }
-
-    .cart-items-panel,
-    .cart-summary-card {
-        padding: 0.85rem;
-        border-radius: var(--market-radius-md, 14px);
-    }
-
-    .cart-items-heading {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-
-    .cart-item-inner {
-        grid-template-columns: 4.75rem 1fr;
-        grid-template-rows: auto auto;
-        gap: 0.8rem;
-        padding: 0.8rem;
-    }
-
-    .cart-item-img-wrap {
-        width: 4.75rem;
-        height: 4.75rem;
-    }
-
-    .cart-item-right {
-        grid-column: 1 / -1;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
-        min-width: unset;
-        padding-top: 0.5rem;
-        border-top: 1px solid var(--market-card-border, #efe3c8);
-    }
-
-    .cart-item-remove {
-        margin-bottom: 0;
-    }
-
-    .cart-stock-alert {
-        align-items: stretch;
-        flex-direction: column;
-    }
+.cart-price .unit-ratio { display:block; font-size:.78rem; color:var(--muted); }
+.mobile-cart-warning { display:none; }
+@media(max-width:900px) {
+    .mobile-cart-warning { display:block; }
+    .cart-summary-card > .cart-summary-warning, .cart-summary-card > .cart-summary-preorder { display:none; }
 }
 </style>
+<style scoped src="./mobileCheckoutFooter.css"></style>

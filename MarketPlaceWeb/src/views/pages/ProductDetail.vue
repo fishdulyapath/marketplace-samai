@@ -1,5 +1,5 @@
 <script setup>
-import CartQtyStepper from '@/components/product/CartQtyStepper.vue';
+import PurchaseActions from '@/components/product/PurchaseActions.vue';
 import ProductCard from '@/components/product/ProductCard.vue';
 import { useSilentRefresh } from '@/composables/useSilentRefresh';
 import ProductService from '@/services/ProductService';
@@ -18,7 +18,7 @@ import OverlayPanel from 'primevue/overlaypanel';
 import ProgressSpinner from 'primevue/progressspinner';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 const props = defineProps({
@@ -30,6 +30,7 @@ const props = defineProps({
         type: String,
         default: ''
     },
+    selection: Object,
     embedded: {
         type: Boolean,
         default: false
@@ -40,13 +41,11 @@ const route = useRoute();
 const router = useRouter();
 const product = ref(null);
 const images = ref([]);
-// 🚨 ความหมายเปลี่ยนแล้ว (รีวิว 260908 สไลด์ 2): เดิมคือ "จำนวนที่จะเพิ่ม"
-// ตอนนี้คือ "จำนวนรวมในตะกร้าของหน่วยที่เลือก" เพราะไม่มีปุ่มยืนยันแล้ว
-const quantity = ref(0);
+const quantity = ref(1);
 const loading = ref(true);
 const priceLoading = ref(false);
 const priceLoadError = ref('');
-const cartQtyStepper = ref(null);
+
 // แยกสถานะบันทึกตามสินค้า+หน่วย เพื่อให้สลับหน่วยระหว่าง request ได้อย่างปลอดภัย
 const pendingCartKeys = ref(new Set());
 const toast = useToast();
@@ -66,7 +65,8 @@ const newProducts = ref([]);
 const activeItemCode = ref(props.itemCode || props.id || route.params.id || '');
 
 const authenStore = useAuthenStore();
-const isLoggedIn = computed(() => authenStore.isAuthenticated);
+const needsCustomer = computed(() => authenStore.userType === 'employee' && !authenStore.userCode);
+const isLoggedIn = computed(() => authenStore.isAuthenticated && !needsCustomer.value);
 const isEmbedded = computed(() => props.embedded);
 const safeProductDescription = computed(() => sanitizeProductDescription(product.value?.description || ''));
 // รายละเอียดโปรโมชั่นที่แอดมินพิมพ์เอง — ล้าง HTML ด้วยตัวเดียวกับรายละเอียดสินค้า
@@ -215,6 +215,11 @@ const productMetaRows = computed(() => {
 const hasProductMetaRows = computed(() => productMetaRows.value.length > 0);
 
 // สไลด์กาลเลอรี่ responsive options
+const wideScreen = typeof window !== 'undefined' ? window.matchMedia('(min-width: 861px)') : null;
+const wideLayout = ref(wideScreen?.matches ?? false);
+function syncGalleryLayout() { wideLayout.value = wideScreen?.matches ?? false; }
+onMounted(() => wideScreen?.addEventListener('change', syncGalleryLayout));
+onBeforeUnmount(() => wideScreen?.removeEventListener('change', syncGalleryLayout));
 const galleryOptions = ref([
     {
         breakpoint: '992px',
@@ -237,8 +242,7 @@ const quantityInCart = computed(() => {
     return item ? toOrderQty(item.qty) : 0;
 });
 
-// quantity คือจำนวนรวมในตะกร้าอยู่แล้ว จึงไม่ต้องบวกของเดิมซ้ำ
-const totalSelectedWithCart = computed(() => toOrderQty(quantity.value));
+const totalSelectedWithCart = computed(() => quantityInCart.value + toOrderQty(quantity.value));
 
 // Maximum Allowance = จำนวนสั่งสูงสุดต่อคำสั่งซื้อ กำหนดต่อหน่วย (REQ3)
 // null = ไม่จำกัด · server บังคับซ้ำอีกชั้นที่ /sendorder และ /validatecartstock
@@ -418,7 +422,7 @@ const formattedDiscountPromotions = computed(() => {
 });
 
 function goToLogin() {
-    router.push('/auth/login');
+    router.push(needsCustomer.value ? { path: '/auth/login', query: { mode: 'employee', selectCustomer: '1', redirect: '/marketplace' } } : '/auth/login');
 }
 
 function getProductShareUrl() {
@@ -742,6 +746,11 @@ async function fetchProductDetail(itemCodeArg = '') {
         isProductSet.value = false;
         setItems.value = [];
         product.value = normalizeProductDetailData(result.data);
+        if (itemCode === props.itemCode && props.selection) {
+            const index = [product.value, ...(product.value.otherUnits || [])].findIndex(unit => unit.unit_code === props.selection.unitCode);
+            selectedUnitIndex.value = Math.max(0, index);
+            quantity.value = index >= 0 ? Math.max(1, Math.trunc(Number(props.selection.qty)) || 1) : 1;
+        }
         await fetchProductImages();
 
         await refreshSelectedUnitPrice();
@@ -757,7 +766,9 @@ async function fetchProductDetail(itemCodeArg = '') {
     }
 }
 
+let priceRevision = 0;
 async function refreshSelectedUnitPrice(options = {}) {
+    const revision = ++priceRevision;
     // silent = รีเฟรชเบื้องหลัง ห้ามแตะ priceLoading เพราะทำให้ปุ่มเพิ่มลงตะกร้า disabled (REQ1)
     const silent = options.silent === true;
     priceLoadError.value = '';
@@ -775,10 +786,11 @@ async function refreshSelectedUnitPrice(options = {}) {
 
     if (!silent) priceLoading.value = true;
     try {
-        const priceResult = await ProductService.getProductPrice(product.value.code, unitSource.unit_code, quantity.value || '1', localStorage.getItem('_userCode') || '', {
+        const priceResult = await ProductService.getProductPrice(product.value.code, unitSource.unit_code, totalSelectedWithCart.value || 1, localStorage.getItem('_userCode') || '', {
             barcode: unitSource.barcode || product.value.barcode || ''
         });
 
+        if (revision !== priceRevision) return;
         if (priceResult) {
             const nextPrice = priceResult.price ?? unitSource.price;
             unitSource.price = nextPrice;
@@ -792,10 +804,11 @@ async function refreshSelectedUnitPrice(options = {}) {
             priceLoadError.value = 'NO_PRICE_RESULT';
         }
     } catch (error) {
+        if (revision !== priceRevision) return;
         console.warn(`Unable to refresh price for ${product.value.code}/${unitSource.unit_code}`, error);
         priceLoadError.value = 'PRICE_ERROR';
     } finally {
-        if (!silent) priceLoading.value = false;
+        if (revision === priceRevision) priceLoading.value = false;
     }
 }
 
@@ -832,24 +845,13 @@ async function refreshStockAndPriceSilently() {
 const silentRefresh = useSilentRefresh(refreshStockAndPriceSilently);
 
 
-// ดึงจำนวนจริงของหน่วยที่เลือกจากตะกร้ามาใส่ stepper
-function syncQuantityFromCart() {
-    quantity.value = quantityInCart.value;
-}
-
-// สลับหน่วย / ตะกร้าเปลี่ยนจากที่อื่น → เลขบน stepper ต้องตามทันที
-watch(quantityInCart, syncQuantityFromCart, { immediate: true });
-
-// เขียนจำนวนใหม่ลงตะกร้าโดยตรง — nextQty คือ "จำนวนรวมที่ต้องการ" ไม่ใช่ส่วนต่าง
-function commitCartQty(nextQty) {
+function addSelectedQuantity() {
     if (!product.value) return;
     if (!isLoggedIn.value) {
         goToLogin();
         return;
     }
 
-    // จับหน่วยไว้ตั้งแต่เข้าฟังก์ชัน หลัง CartQtyStepper flush ก่อน changeUnit
-    // ห้ามอ่าน currentUnit ใหม่หลังเริ่มงาน async เพราะผู้ใช้อาจสลับหน่วยไปแล้ว
     const unit = currentUnit.value;
     if (!unit) {
         toast.add({
@@ -858,32 +860,13 @@ function commitCartQty(nextQty) {
             detail: t('productDetail.selectUnitAgain'),
             life: 3000
         });
-        syncQuantityFromCart();
         return;
     }
     const pendingKey = cartUnitKey(unit);
     if (pendingCartKeys.value.has(pendingKey)) return;
 
-    const requested = Math.max(0, Math.trunc(Number(nextQty) || 0));
-
-    // ลดจนเหลือ 0 = เอาออกจากตะกร้า
-    if (requested === 0) {
-        const line = cartStore.cartItems.find((item) => item.item_code === (unit.item_code || product.value.code) && item.unit_code === unit.unit_code);
-        if (!line) return;
-        setCartUnitBusy(pendingKey, true);
-        cartStore
-            .removeFromCart(line.guid_code || line.id)
-            .catch((err) => {
-                console.error('Error removing from cart:', err);
-                toast.add({ severity: 'error', summary: t('productDetail.error'), detail: t('productDetail.addCartFailed'), life: 3000 });
-            })
-            .finally(() => {
-                setCartUnitBusy(pendingKey, false);
-                syncQuantityFromCart();
-            });
-        return;
-    }
-
+    const requested = totalSelectedWithCart.value;
+    if (!hasValidPrice.value || priceLoading.value || quantity.value < 1) return;
     // ด่านสุดท้ายฝั่ง UI ก่อนยิง API — เกินลิมิตต่อคำสั่งซื้อไม่ให้เพิ่ม (REQ3)
     if (exceedsMaxAllowance.value) {
         toast.add({
@@ -892,7 +875,6 @@ function commitCartQty(nextQty) {
             detail: t('productDetail.maxAllowanceHint', { max: maxAllowanceForUnit.value, unit: unit.unit_code }),
             life: 4000
         });
-        syncQuantityFromCart();
         return;
     }
 
@@ -903,7 +885,6 @@ function commitCartQty(nextQty) {
             detail: priceLoadError.value ? t('productDetail.priceCheckFailed') : t('productDetail.waitPriceCheck'),
             life: 3000
         });
-        syncQuantityFromCart();
         return;
     }
 
@@ -915,7 +896,6 @@ function commitCartQty(nextQty) {
             detail: t('productDetail.selectUnitAgain'),
             life: 3000
         });
-        syncQuantityFromCart();
         return;
     }
     const cartItem = {
@@ -946,11 +926,9 @@ function commitCartQty(nextQty) {
         cartStore.setItemsCache[cartItem.item_code] = setItems.value;
     }
 
-    // ปุ่มยืนยันหายไปแล้ว การกัน "สั่งเกิน" จึงต้องมาอยู่ตรงนี้แทน
     const cap = maxCartQtyForUnit.value;
     const finalQty = cap === null ? requested : Math.min(requested, cap);
     if (finalQty <= 0) {
-        syncQuantityFromCart();
         return;
     }
     if (finalQty < requested) {
@@ -1001,17 +979,17 @@ function commitCartQty(nextQty) {
         })
         .finally(() => {
             setCartUnitBusy(pendingKey, false);
-            // ดึงค่าจริงจากตะกร้ากลับมา — สำเร็จก็ตรงอยู่แล้ว ล้มเหลวก็เด้งกลับค่าเดิม
-            syncQuantityFromCart();
         });
 }
 // เปลี่ยนหน่วยสินค้า
-// 🚨 ห้ามรีเซ็ตเป็น 1 อีก — ไม่มีปุ่มยืนยันแล้ว การตั้งค่าเองจะกลายเป็นการสั่งซื้อ
-//    โดยที่ผู้ใช้ไม่ได้กด ปล่อยให้ watcher ดึงจำนวนจริงของหน่วยใหม่มาแทน
+watch([totalSelectedWithCart, selectedUnitIndex], () => {
+    if (!loading.value) refreshSelectedUnitPrice();
+});
+
 function changeUnit(index) {
-    if (index !== selectedUnitIndex.value) cartQtyStepper.value?.flushPending();
+    if (index === selectedUnitIndex.value) return;
+    quantity.value = 1;
     selectedUnitIndex.value = index;
-    refreshSelectedUnitPrice();
 }
 
 function goBack() {
@@ -1106,7 +1084,9 @@ function toggleFavorite() {
                     <Galleria
                         v-if="images.length > 0"
                         :value="images"
-                        :numVisible="5"
+                        :numVisible="Math.min(images.length, wideLayout ? 3 : 4)"
+                        :thumbnailsPosition="wideLayout ? 'left' : 'bottom'"
+                        :verticalThumbnailViewPortHeight="(Math.min(images.length, 3) * 74) + 'px'"
                         :circular="true"
                         :showThumbnails="images.length > 1"
                         :showItemNavigators="images.length > 1"
@@ -1264,37 +1244,10 @@ function toggleFavorite() {
                         </div>
                     </div>
 
-                    <div v-if="currentUnit" class="detail-control-row">
-                        <div class="detail-label">{{ t('productDetail.quantity') }}</div>
-                        <div class="detail-quantity-panel">
-                            <!-- กด +/- แล้วเข้า/ออกตะกร้าทันที ไม่มีปุ่มยืนยันอีกแล้ว -->
-                            <CartQtyStepper
-                                ref="cartQtyStepper"
-                                :model-value="quantityInCart"
-                                :max="maxCartQtyForUnit"
-                                :busy="isCurrentCartUnitBusy"
-                                :disabled="!isLoggedIn || !hasValidPrice || priceLoading"
-                                :decrease-label="t('productDetail.decreaseQuantityAria')"
-                                :increase-label="t('productDetail.increaseQuantityAria')"
-                                :input-label="t('productDetail.quantityAria')"
-                                @commit="commitCartQty"
-                            />
-                        </div>
-                    </div>
-
-                    <div v-if="isLoggedIn && currentUnit" class="detail-preorder-preview">
-                        <p class="detail-preorder-hint">ส่งคำขอสั่งซื้อได้ โดยพนักงานจะเลือกคลังและที่เก็บก่อนยืนยันคำสั่งซื้อ</p>
-                    </div>
-
-                    <!-- ปุ่ม "เพิ่มไปยังรถเข็น" ถูกตัดออกตามรีวิว 260908 — ตัวเพิ่ม/ลดจำนวน
-                         ด้านบนเขียนลงตะกร้าเองแล้ว กล่องนี้จึงเหลือไว้ให้ปุ่มเข้าสู่ระบบเท่านั้น
-                         ต้อง v-if ที่กล่อง ไม่ใช่ที่ปุ่ม ไม่งั้นเหลือแถบว่างมีขอบ/เงาค้างอยู่ -->
-                    <div v-if="!isLoggedIn" class="detail-actions">
-                        <button type="button" class="detail-primary-btn is-outline" @click="goToLogin">
-                            <i class="pi pi-sign-in"></i>
-                            {{ t('productDetail.loginToOrder') }}
-                        </button>
-                    </div>
+                    <PurchaseActions v-model="quantity" :logged-in="isLoggedIn" :needs-customer="needsCustomer" :unit="currentUnit?.unit_code"
+                    :busy="isCurrentCartUnitBusy" :disabled="!currentUnit || !hasValidPrice || priceLoading || Boolean(priceLoadError)"
+                    :max="maxCartQtyForUnit === null ? null : Math.max(0, maxCartQtyForUnit - quantityInCart)"
+                    @add="addSelectedQuantity" @login="goToLogin" />
                 </aside>
             </section>
 
@@ -1332,7 +1285,7 @@ function toggleFavorite() {
             <section
                 v-if="loadingDisplayDetail || hasProductMetaRows || safeProductDescription || productVideoEmbed"
                 id="product-full-description"
-                class="product-detail-section"
+                class="product-detail-section full-product-story" :class="{ 'with-video': productVideoEmbed }"
             >
                 <div class="product-detail-section-head">
                     <div>
@@ -2724,5 +2677,24 @@ function toggleFavorite() {
         padding: 0.65rem 0.9rem;
         box-shadow: 0 -10px 28px rgba(15, 23, 42, 0.1);
     }
+}
+
+@media (max-width:900px) {
+    .detail-title-actions { display:none; }
+    .detail-unit-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .detail-unit-btn { min-height:44px; border-radius:.6rem; }
+    .product-detail-page:not(.is-embedded) .purchase-actions { bottom:calc(var(--market-mobile-nav-height,64px) + env(safe-area-inset-bottom)); }
+    .purchase-actions { position:fixed; inset:auto 0 0; z-index:995; padding-bottom:max(.75rem,env(safe-area-inset-bottom)); }
+    .detail-main { padding-bottom:calc(6rem + env(safe-area-inset-bottom)); }
+}
+
+@media(min-width:901px) {
+    .detail-title-actions, .section-kicker { display:none; }
+    .product-meta-card { position:static; }
+    .product-meta-card dl { display:grid; grid-template-columns:minmax(90px,.45fr) 1fr; align-items:baseline; }
+    .product-detail-content-grid:has(.product-meta-card:only-child) { grid-template-columns:minmax(0,1fr); }
+    .full-product-story.with-video { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.25fr); column-gap:1.5rem; align-items:start; }
+    .full-product-story.with-video .product-video-card { grid-column:2; grid-row:1 / span 2; margin:0; }
+    .full-product-story.with-video .product-detail-content-grid { grid-template-columns:minmax(0,1fr); }
 }
 </style>

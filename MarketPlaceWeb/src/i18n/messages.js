@@ -215,6 +215,8 @@ export const messages = {
             loginToOrder: "เข้าสู่ระบบเพื่อสั่งซื้อ",
             shareLabel: "แชร์:",
             viewMoreDetails: "ดูรายละเอียดเพิ่มเติม",
+            viewMoreShort: "รายละเอียดเพิ่มเติม",
+            cartUnits: "ในรถเข็น",
             productNotFound: "ไม่พบข้อมูลสินค้า",
             buyFromQty: "ซื้อ {from} {unit} ขึ้นไป",
             buyFromToQty: "ซื้อ {from} - {to} {unit}",
@@ -287,6 +289,9 @@ export const messages = {
             toast: { error: 'เกิดข้อผิดพลาด', detailLoadOrderFailed: 'ไม่สามารถดึงรายละเอียดคำสั่งซื้อได้', createQrFailed: 'ไม่สามารถสร้าง QR Code ได้', noQrFromServer: 'ไม่ได้รับข้อมูล QR Code จากเซิร์ฟเวอร์', paymentSuccess: 'การชำระเงินสำเร็จ', paymentReceived: 'ระบบได้รับการชำระเงินเรียบร้อยแล้ว', savePaymentFailed: 'ไม่สามารถบันทึกข้อมูลการชำระเงินได้', cannotPay: 'ไม่สามารถชำระเงินได้', noPayableDocs: 'ไม่พบเอกสารที่สามารถชำระเงินได้', selectPaymentItems: 'กรุณาเลือกรายการที่ต้องการชำระเงิน', noPayableSelected: 'ไม่มีรายการที่สามารถชำระเงินได้ในรายการที่เลือก', downloadSuccess: 'ดาวน์โหลดสำเร็จ', qrSaved: 'บันทึกรูปภาพ QR Code สำเร็จ', qrDownloadFailed: 'ไม่สามารถดาวน์โหลดรูปภาพ QR Code ได้', paymentTimeout: 'หมดเวลาชำระเงิน', qrExpiredDetail: 'QR Code หมดอายุแล้ว กรุณาสร้าง QR Code ใหม่', reorderPartial: 'สั่งซื้อซ้ำบางส่วน', reorderSuccess: 'สั่งซื้อซ้ำสำเร็จ', addedItemsToCart: 'เพิ่ม {count} รายการลงตะกร้าแล้ว', addedItemsMissing: 'เพิ่ม {added} รายการลงตะกร้าแล้ว, ไม่พบ {missing} รายการ', reorderFailed: 'ไม่สามารถสั่งซื้อซ้ำได้', noCustomer: 'ไม่พบข้อมูลลูกค้า', noOrderData: 'ไม่พบข้อมูลคำสั่งซื้อ', loginAgain: 'กรุณาเข้าสู่ระบบใหม่', processing: 'กำลังดำเนินการ', checkingPriceQty: 'กำลังตรวจสอบราคาและจำนวนสินค้า...', cancelSuccess: 'ยกเลิกคำสั่งซื้อสำเร็จ', cancelSuccessDetail: 'ยกเลิกคำสั่งซื้อเลขที่ {docNo} เรียบร้อยแล้ว', noAvailableReorder: 'ไม่มีสินค้าที่สามารถสั่งซื้อได้ในขณะนี้' }
         },
         cart: {
+            continueOrder: 'ดำเนินการสั่งซื้อ',
+            editQty: 'แก้จำนวน',
+            addButton: 'ใส่รถเข็น',
             cart: 'ตะกร้าสินค้า',
             itemCount: '{count} รายการ',
             empty: 'ตะกร้าของคุณว่างเปล่า',
@@ -501,7 +506,7 @@ export const messages = {
             continueShopping: 'ซื้อสินค้าต่อ',
             fixStockFirst: 'แก้ไขสต๊อกก่อน',
             checkoutLocked: 'ยืนยันซ้ำไม่ได้',
-            checkout: 'จัดการตะกร้า / สั่งซื้อ',
+            checkout: 'ดำเนินการสั่งซื้อ',
             checkingStock: 'กำลังตรวจสอบสต๊อกสินค้า',
             mustFixStock: 'มีสินค้า {count} รายการที่ต้องแก้ไขก่อนสั่งซื้อ',
             preorderNotAllowedHint: 'สินค้านี้ไม่เปิดให้ Preorder ต้องปรับจำนวนไม่เกิน {qty} {unit}',
@@ -737,6 +742,9 @@ export const messages = {
             customerCodeMissing: 'รหัสลูกค้าเป็นค่าว่างไม่สามารถบันทึกได้ กรุณาเข้าสู่ระบบใหม่'
         },
         orderComplete: {
+            pendingTitle: 'ส่งคำขอแล้ว รอพนักงานยืนยัน',
+            pendingHint: 'ติดตามสถานะคำขอได้ในคำสั่งซื้อของฉัน',
+            requestNo: 'เลขคำขอ MPR',
             eyebrow: 'Order Completed',
             title: 'คำสั่งซื้อของคุณถูกบันทึกเรียบร้อยแล้ว',
             subtitle: 'ระบบได้รับรายการสั่งซื้อแล้ว คุณสามารถตรวจสอบรายละเอียดและสถานะได้ภายหลัง',
@@ -1046,6 +1054,8 @@ export const messages = {
             loginToOrder: "Sign in to order",
             shareLabel: "Share:",
             viewMoreDetails: "View more details",
+            viewMoreShort: "More details",
+            cartUnits: "In cart",
             productNotFound: "Product not found",
             buyFromQty: "Buy {from} {unit} or more",
             buyFromToQty: "Buy {from} - {to} {unit}",
@@ -1118,6 +1128,9 @@ export const messages = {
             toast: { error: 'Error', detailLoadOrderFailed: 'Unable to load order details', createQrFailed: 'Unable to generate QR Code', noQrFromServer: 'No QR Code data received from the server', paymentSuccess: 'Payment successful', paymentReceived: 'Payment has been received', savePaymentFailed: 'Unable to save payment information', cannotPay: 'Unable to pay', noPayableDocs: 'No payable documents found', selectPaymentItems: 'Please select items to pay', noPayableSelected: 'No payable items in the current selection', downloadSuccess: 'Download complete', qrSaved: 'QR Code image saved', qrDownloadFailed: 'Unable to download QR Code image', paymentTimeout: 'Payment timed out', qrExpiredDetail: 'QR Code has expired. Please generate a new one.', reorderPartial: 'Partially reordered', reorderSuccess: 'Reordered successfully', addedItemsToCart: 'Added {count} items to cart', addedItemsMissing: 'Added {added} items to cart, {missing} unavailable', reorderFailed: 'Unable to reorder', noCustomer: 'Customer data not found', noOrderData: 'Order data not found', loginAgain: 'Please log in again', processing: 'Processing', checkingPriceQty: 'Checking price and stock...', cancelSuccess: 'Order canceled successfully', cancelSuccessDetail: 'Order {docNo} has been canceled', noAvailableReorder: 'No products are currently available to reorder' }
         },
         cart: {
+            continueOrder: 'Continue order',
+            editQty: 'Edit quantity',
+            addButton: 'Add to cart',
             cart: 'Cart',
             itemCount: '{count} items',
             empty: 'Your cart is empty',
@@ -1331,7 +1344,7 @@ export const messages = {
             continueShopping: 'Continue Shopping',
             fixStockFirst: 'Fix Stock First',
             checkoutLocked: 'Checkout locked',
-            checkout: 'Manage cart / Checkout',
+            checkout: 'Continue order',
             checkingStock: 'Checking stock',
             mustFixStock: '{count} items must be fixed before checkout',
             preorderNotAllowedHint: 'This product is not open for preorder. Adjust quantity to {qty} {unit} or less.',
@@ -1567,6 +1580,9 @@ export const messages = {
             customerCodeMissing: 'Customer code is empty and cannot be saved. Please sign in again.'
         },
         orderComplete: {
+            pendingTitle: 'Request sent. Awaiting staff confirmation',
+            pendingHint: 'Track the request in My orders.',
+            requestNo: 'MPR request number',
             eyebrow: 'Order Completed',
             title: 'Your order has been saved',
             subtitle: 'We have received your order. You can review details and status later.',
@@ -1876,6 +1892,8 @@ export const messages = {
             loginToOrder: "ເຂົ້າລະບົບເພື່ອສັ່ງຊື້",
             shareLabel: "ແຊຣ໌:",
             viewMoreDetails: "ເບິ່ງລາຍລະອຽດເພີ່ມ",
+            viewMoreShort: "ລາຍລະອຽດເພີ່ມ",
+            cartUnits: "ໃນລົດເຂັນ",
             productNotFound: "ບໍ່ພົບຂໍ້ມູນສິນຄ້າ",
             buyFromQty: "ຊື້ {from} {unit} ຂຶ້ນໄປ",
             buyFromToQty: "ຊື້ {from} - {to} {unit}",
@@ -1948,6 +1966,9 @@ export const messages = {
             toast: { error: 'ເກີດຂໍ້ຜິດພາດ', detailLoadOrderFailed: 'ບໍ່ສາມາດດຶງລາຍລະອຽດຄຳສັ່ງຊື້ໄດ້', createQrFailed: 'ບໍ່ສາມາດສ້າງ QR Code ໄດ້', noQrFromServer: 'ບໍ່ໄດ້ຮັບຂໍ້ມູນ QR Code ຈາກເຊີບເວີ', paymentSuccess: 'ຊຳລະເງິນສຳເລັດ', paymentReceived: 'ລະບົບໄດ້ຮັບການຊຳລະເງິນແລ້ວ', savePaymentFailed: 'ບໍ່ສາມາດບັນທຶກຂໍ້ມູນການຊຳລະເງິນໄດ້', cannotPay: 'ບໍ່ສາມາດຊຳລະເງິນໄດ້', noPayableDocs: 'ບໍ່ພົບເອກະສານທີ່ຊຳລະໄດ້', selectPaymentItems: 'ກະລຸນາເລືອກລາຍການທີ່ຕ້ອງການຊຳລະ', noPayableSelected: 'ບໍ່ມີລາຍການທີ່ຊຳລະໄດ້ໃນລາຍການທີ່ເລືອກ', downloadSuccess: 'ດາວໂຫຼດສຳເລັດ', qrSaved: 'ບັນທຶກຮູບ QR Code ສຳເລັດ', qrDownloadFailed: 'ບໍ່ສາມາດດາວໂຫຼດຮູບ QR Code ໄດ້', paymentTimeout: 'ໝົດເວລາຊຳລະເງິນ', qrExpiredDetail: 'QR Code ໝົດອາຍຸແລ້ວ ກະລຸນາສ້າງ QR Code ໃໝ່', reorderPartial: 'ສັ່ງຊື້ຊ້ຳບາງສ່ວນ', reorderSuccess: 'ສັ່ງຊື້ຊ້ຳສຳເລັດ', addedItemsToCart: 'ເພີ່ມ {count} ລາຍການເຂົ້າກະຕ່າແລ້ວ', addedItemsMissing: 'ເພີ່ມ {added} ລາຍການເຂົ້າກະຕ່າແລ້ວ, ບໍ່ພົບ {missing} ລາຍການ', reorderFailed: 'ບໍ່ສາມາດສັ່ງຊື້ຊ້ຳໄດ້', noCustomer: 'ບໍ່ພົບຂໍ້ມູນລູກຄ້າ', noOrderData: 'ບໍ່ພົບຂໍ້ມູນຄຳສັ່ງຊື້', loginAgain: 'ກະລຸນາເຂົ້າລະບົບໃໝ່', processing: 'ກຳລັງດຳເນີນການ', checkingPriceQty: 'ກຳລັງກວດສອບລາຄາແລະຈຳນວນສິນຄ້າ...', cancelSuccess: 'ຍົກເລີກຄຳສັ່ງຊື້ສຳເລັດ', cancelSuccessDetail: 'ຍົກເລີກຄຳສັ່ງຊື້ເລກທີ່ {docNo} ສຳເລັດແລ້ວ', noAvailableReorder: 'ບໍ່ມີສິນຄ້າທີ່ສາມາດສັ່ງຊື້ຊ້ຳໄດ້ໃນຂະນະນີ້' }
         },
         cart: {
+            continueOrder: 'ດຳເນີນການສັ່ງຊື້',
+            editQty: 'ແກ້ໄຂຈຳນວນ',
+            addButton: 'ໃສ່ກະຕ່າ',
             cart: 'ກະຕ່າສິນຄ້າ',
             itemCount: '{count} ລາຍການ',
             empty: 'ກະຕ່າຂອງທ່ານຍັງວ່າງ',
@@ -2161,7 +2182,7 @@ export const messages = {
             continueShopping: 'ຊື້ສິນຄ້າຕໍ່',
             fixStockFirst: 'ແກ້ໄຂສະຕັອກກ່ອນ',
             checkoutLocked: 'ຢືນຢັນຊ້ຳບໍ່ໄດ້',
-            checkout: 'ຈັດການກະຕ່າ / ສັ່ງຊື້',
+            checkout: 'ດຳເນີນການສັ່ງຊື້',
             checkingStock: 'ກຳລັງກວດສະຕັອກສິນຄ້າ',
             mustFixStock: 'ມີສິນຄ້າ {count} ລາຍການທີ່ຕ້ອງແກ້ໄຂກ່ອນສັ່ງຊື້',
             preorderNotAllowedHint: 'ສິນຄ້ານີ້ບໍ່ເປີດໃຫ້ Preorder ຕ້ອງປັບຈຳນວນບໍ່ເກີນ {qty} {unit}',
@@ -2397,6 +2418,9 @@ export const messages = {
             customerCodeMissing: 'ລະຫັດລູກຄ້າວ່າງ ບໍ່ສາມາດບັນທຶກໄດ້ ກະລຸນາເຂົ້າລະບົບໃໝ່'
         },
         orderComplete: {
+            pendingTitle: 'ສົ່ງຄຳຂໍແລ້ວ ລໍຖ້າພະນັກງານຢືນຢັນ',
+            pendingHint: 'ຕິດຕາມສະຖານະໄດ້ໃນຄຳສັ່ງຊື້ຂອງຂ້ອຍ',
+            requestNo: 'ເລກຄຳຂໍ MPR',
             eyebrow: 'Order Completed',
             title: 'ຄຳສັ່ງຊື້ຂອງທ່ານຖືກບັນທຶກຮຽບຮ້ອຍແລ້ວ',
             subtitle: 'ລະບົບໄດ້ຮັບລາຍການສັ່ງຊື້ແລ້ວ ທ່ານສາມາດກວດສອບລາຍລະອຽດ ແລະສະຖານະໄດ້ພາຍຫຼັງ',

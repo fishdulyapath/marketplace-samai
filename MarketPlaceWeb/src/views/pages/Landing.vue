@@ -980,7 +980,9 @@ function goToProduct(product) {
     showProductDetail.value = true;
 }
 
-function openFullProductDetail(itemCode) {
+const fullSelection = ref(null);
+function openFullProductDetail(itemCode, selection = null) {
+    fullSelection.value = selection;
     selectedProductCode.value = itemCode;
     showProductDetail.value = false;
     showProductSetDetail.value = false;
@@ -1303,7 +1305,7 @@ const productImagePlaceholder = ProductService.getPlaceholderImage();
             @show-full-detail="openFullProductDetail"
         />
 
-        <ProductFullDetailDialog :visible="showProductFullDetail" :item-code="selectedProductCode" @update:visible="showProductFullDetail = $event" @added-to-cart="handleAddedToCart" @favorite-changed="handleFavoriteChanged" />
+        <ProductFullDetailDialog :selection="fullSelection" :visible="showProductFullDetail" :item-code="selectedProductCode" @update:visible="showProductFullDetail = $event" @added-to-cart="handleAddedToCart" @favorite-changed="handleFavoriteChanged" />
     </main>
 </template>
 

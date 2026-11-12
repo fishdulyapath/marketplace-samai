@@ -8,7 +8,8 @@
 // แก้จำนวนได้ในตัว overlay เลย ไม่ต้องเข้าหน้าตะกร้าก่อน
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import CartQtyStepper from '@/components/product/CartQtyStepper.vue';
+import CartQuantityEditor from './CartQuantityEditor.vue';
+import ProductFullDetailDialog from '@/views/pages/ProductFullDetailDialog.vue';
 import ProductDetailDialog from '@/views/pages/ProductDetailDialog.vue';
 import ProductSetDialog from '@/views/pages/ProductSetDialog.vue';
 import ProductService from '@/services/ProductService';
@@ -21,7 +22,7 @@ import { buildBaseUnitRatioText } from '@/utils/unitConversion';
 import { PRODUCT_IMAGE_PLACEHOLDER } from '@/utils/productPlaceholder';
 
 const props = defineProps({
-    visible: { type: Boolean, default: false }
+    page: Boolean, visible: { type: Boolean, default: false }
 });
 
 const emit = defineEmits(['update:visible']);
@@ -32,6 +33,15 @@ const languageStore = useLanguageStore();
 const t = (key, params) => languageStore.t(key, params);
 
 const items = computed(() => cartStore.cartItems || []);
+const productGroups = computed(() => {
+    const groups = new Map();
+    for (const item of items.value) {
+        const code = item.item_code || item.id;
+        if (!groups.has(code)) groups.set(code, { code, first: item, lines: [] });
+        groups.get(code).lines.push(item);
+    }
+    return [...groups.values()];
+});
 const totalLines = computed(() => Math.max(cartStore.totalCartCount || 0, items.value.length));
 const totalAmount = computed(() => cartStore.totalAmount);
 const totalItems = computed(() => cartStore.totalItems);
@@ -41,11 +51,7 @@ const pendingKeys = ref(new Set());
 const isLoading = ref(false);
 
 function lineKey(item) {
-    return String(item?.guid_code || item?.id || `${item?.item_code}::${item?.unit_code}`);
-}
-
-function isBusy(item) {
-    return pendingKeys.value.has(lineKey(item));
+    return JSON.stringify([item.guid_code || item.id, item.item_code, item.unit_code]);
 }
 
 function displayName(item) {
@@ -83,25 +89,31 @@ function maxQtyOf(item) {
     return normalizeMaxOrderQty(item?.max_order_qty);
 }
 
-async function commitQty(item, nextQty) {
+const editingKey = ref(null);
+const saveError = ref('');
+async function saveQuantity(item, nextQty) {
     const key = lineKey(item);
     if (pendingKeys.value.has(key)) return;
 
     const qty = Math.max(0, Math.trunc(Number(nextQty) || 0));
-    if (qty === toOrderQty(item.qty)) return;
+    if (qty === toOrderQty(item.qty)) return true;
+    saveError.value = '';
 
     // Set ใน ref ต้องสร้างใหม่ Vue ถึงจะเห็นการเปลี่ยนแปลง
     pendingKeys.value = new Set(pendingKeys.value).add(key);
     try {
         if (qty === 0) {
-            await cartStore.removeFromCart(item.guid_code || item.id);
+            await cartStore.removeFromCart(item);
         } else {
-            await cartStore.addToCart({ ...item, qty }, qty);
+            await cartStore.updateCartItem({ ...item, qty, quantity: qty });
+            await cartStore.fetchCartSummary();
         }
+        return true;
     } catch (err) {
-        console.error('CartOverlay commitQty failed:', err);
+        saveError.value = err.message || t('common.error');
         // ยิงไม่สำเร็จ — ดึงตะกร้าจริงกลับมาให้เลขตรงกับฐานข้อมูล
         await cartStore.loadCartItems(true).catch(() => {});
+        return false;
     } finally {
         const next = new Set(pendingKeys.value);
         next.delete(key);
@@ -110,16 +122,17 @@ async function commitQty(item, nextQty) {
 }
 
 async function removeLine(item) {
-    await commitQty(item, 0);
+    await saveQuantity(item, 0);
 }
 
 function close() {
-    emit('update:visible', false);
+    if (!pendingKeys.value.size) emit('update:visible', false);
 }
 
 function goToCart() {
+    if (editingKey.value || pendingKeys.value.size) return;
     close();
-    router.push('/cart');
+    router.push({ path: '/cart', query: router.currentRoute.value.query });
 }
 
 // คลิกชื่อ/รูปในตะกร้า → เปิด dialog สั่งสินค้า (ไม่ใช่หน้ารายละเอียดเต็ม)
@@ -129,6 +142,14 @@ const DIALOG_Z_INDEX = 1300;
 const selectedProductCode = ref('');
 const selectedProductIsSet = ref(false);
 const showProductDialog = ref(false);
+const fullDetail = ref(false);
+const fullSelection = ref(null);
+function openFullProductDetail(code, selection = null) {
+    selectedProductCode.value = code;
+    fullSelection.value = selection;
+    showProductDialog.value = false;
+    fullDetail.value = true;
+}
 
 function openProductDialog(item) {
     const code = String(item?.item_code || item?.code || '').trim();
@@ -142,7 +163,7 @@ function openProductDialog(item) {
 watch(showProductDialog, async (open) => {
     if (open) return;
     // PrimeVue Dialog คืนค่า body overflow ตอนปิด ทำให้ drawer เลื่อนหน้าหลังได้อีก
-    if (typeof document !== 'undefined' && props.visible) document.body.style.overflow = 'hidden';
+    if (typeof document !== 'undefined' && !props.page && props.visible) document.body.style.overflow = 'hidden';
     await cartStore.loadCartItems(true).catch(() => {});
 });
 
@@ -150,53 +171,56 @@ watch(showProductDialog, async (open) => {
 watch(
     () => props.visible,
     async (open) => {
+        editingKey.value = null;
+        saveError.value = '';
         if (!open) return;
         try {
             isLoading.value = true;
-            await cartStore.loadCartItems(true);
+            await cartStore.loadCartItems(true, true);
         } catch (err) {
             console.error('CartOverlay load failed:', err);
         } finally {
             isLoading.value = false;
         }
-    }
+    }, { immediate: true }
 );
 
 // เปิด drawer แล้วล็อกไม่ให้หน้าข้างหลังเลื่อน (สำคัญมากบนมือถือ)
 watch(
     () => props.visible,
     (open) => {
-        if (typeof document === 'undefined') return;
+        if (props.page || typeof document === 'undefined') return;
         document.body.style.overflow = open ? 'hidden' : '';
     }
 );
 
 function onKeydown(event) {
-    if (event.key === 'Escape' && props.visible) close();
+    if (event.key === 'Escape' && props.visible && !showProductDialog.value && !fullDetail.value) close();
 }
 
 if (typeof window !== 'undefined') window.addEventListener('keydown', onKeydown);
 
 onBeforeUnmount(() => {
     if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydown);
-    if (typeof document !== 'undefined') document.body.style.overflow = '';
+    if (!props.page && typeof document !== 'undefined') document.body.style.overflow = '';
 });
 </script>
 
 <template>
-    <Teleport to="body">
+    <Teleport to="body" :disabled="page">
         <Transition name="cart-overlay">
-            <div v-if="visible" class="cart-overlay-root">
-                <div class="cart-overlay-scrim" @click="close"></div>
+            <div v-if="visible" class="cart-overlay-root" :class="{ 'basket-page': page }">
+                <div v-if="!page" class="cart-overlay-scrim" @click="close"></div>
 
-                <aside class="cart-overlay-panel" role="dialog" aria-modal="true" :aria-label="t('cart.cart')">
+                <aside class="cart-overlay-panel" :role="page ? 'region' : 'dialog'" :aria-modal="page ? undefined : true" :aria-label="t('cart.cart')">
                     <!-- หัว: คงที่ -->
                     <header class="cart-overlay-head">
+                        <i class="pi pi-shopping-cart cart-mark" aria-hidden="true"></i>
                         <div>
                             <h2>{{ t('cart.cart') }}</h2>
                             <span>{{ t('cart.itemCount', { count: totalLines }) }}</span>
                         </div>
-                        <button type="button" class="cart-overlay-close" :aria-label="t('common.close')" @click="close">
+                        <button type="button" v-if="!page" class="cart-overlay-close" :aria-label="t('common.close')" @click="close">
                             <i class="pi pi-times"></i>
                         </button>
                     </header>
@@ -213,54 +237,40 @@ onBeforeUnmount(() => {
                         </div>
 
                         <ul v-else class="cart-overlay-list">
-                            <li v-for="item in items" :key="lineKey(item)" class="cart-overlay-line">
-                                <button type="button" class="cart-overlay-thumb" :aria-label="displayName(item)" @click="openProductDialog(item)">
-                                    <img :src="imageOf(item)" :alt="displayName(item)" loading="lazy" decoding="async" @error="onImageError" />
+                            <li v-for="group in productGroups" :key="group.code" class="cart-overlay-product">
+                                <button class="cart-group-title" type="button" @click="openProductDialog(group.first)">
+                                    <img :src="imageOf(group.first)" alt="" loading="lazy" @error="onImageError" />
+                                    <strong>{{ displayName(group.first) }}</strong>
                                 </button>
-
-                                <div class="cart-overlay-info">
-                                    <button type="button" class="cart-overlay-name" @click="openProductDialog(item)">{{ displayName(item) }}</button>
-                                    <div class="cart-overlay-meta">
-                                        <span class="cart-overlay-unit">{{ item.unit_code }}</span>
-                                        <span v-if="ratioTextOf(item)" class="cart-overlay-ratio">{{ ratioTextOf(item) }}</span>
-                                    </div>
-                                    <div class="cart-overlay-price">
-                                        <strong>฿{{ formatMoney(lineTotal(item)) }}</strong>
-                                        <small>฿{{ formatMoney(item.price) }} / {{ item.unit_code }}</small>
-                                    </div>
-
-                                    <CartQtyStepper
-                                        size="sm"
-                                        :model-value="toOrderQty(item.qty)"
-                                        :max="maxQtyOf(item)"
-                                        :busy="isBusy(item)"
-                                        :decrease-label="t('productDetail.decreaseQuantityAria')"
-                                        :increase-label="t('productDetail.increaseQuantityAria')"
-                                        :input-label="t('productDetail.quantityAria')"
-                                        @commit="commitQty(item, $event)"
-                                    />
-                                </div>
-
-                                <button type="button" class="cart-overlay-remove" :aria-label="t('cart.remove')" :disabled="isBusy(item)" @click="removeLine(item)">
+                                <div v-for="item in group.lines" :key="lineKey(item)" class="cart-unit-row" :class="{ editing: editingKey === lineKey(item) }">
+                                    <div class="cart-unit-label"><strong>{{ item.unit_code }}</strong><small>฿{{ formatMoney(item.price) }}</small>
+                                        <small v-if="ratioTextOf(item)">{{ ratioTextOf(item) }}</small></div>
+                                    <div class="cart-unit-editor"><CartQuantityEditor :qty="toOrderQty(item.qty)" :unit="item.unit_code" :name="displayName(item)"
+                                        :active="editingKey === lineKey(item)" :max="maxQtyOf(item)" :disabled="pendingKeys.size > 0"
+                                        :save="qty => saveQuantity(item, qty)" @edit="editingKey = lineKey(item)" @close="editingKey = null" /></div>
+                                    <strong class="cart-unit-total">฿{{ formatMoney(lineTotal(item)) }}</strong>
+                                    <button type="button" class="cart-overlay-remove" :aria-label="t('cart.remove')"  :disabled="pendingKeys.size > 0 || !!editingKey" @click="removeLine(item)">
                                     <i class="pi pi-trash"></i>
-                                </button>
+                                    </button>
+                                </div>
                             </li>
                         </ul>
                     </div>
 
                     <!-- ท้าย: freeze ไว้ตลอด ไม่เลื่อนตามรายการ -->
                     <footer class="cart-overlay-foot">
+                        <p v-if="saveError" role="alert">{{ saveError }}</p>
                         <div class="cart-overlay-sum">
-                            <span>{{ t('common.total') }}</span>
+                            <span>{{ t('common.amount') }}</span>
                             <strong>฿{{ formatMoney(totalAmount) }}</strong>
                         </div>
                         <div class="cart-overlay-sum cart-overlay-sum--sub">
                             <span>{{ t('cart.itemCount', { count: totalLines }) }}</span>
                             <span>{{ totalItems }} {{ t('common.piece') }}</span>
                         </div>
-                        <button type="button" class="cart-overlay-cta" :disabled="items.length === 0" @click="goToCart">
+                        <button type="button" class="cart-overlay-cta" :disabled="!!editingKey || pendingKeys.size > 0 || isLoading || items.length === 0" @click="goToCart">
                             <i class="pi pi-shopping-cart"></i>
-                            {{ t('cartPage.checkout') }}
+                            {{ t('cart.continueOrder') }}
                         </button>
                     </footer>
                 </aside>
@@ -271,13 +281,17 @@ onBeforeUnmount(() => {
                     v-model:visible="showProductDialog"
                     :itemCode="selectedProductCode"
                     :baseZIndex="DIALOG_Z_INDEX"
+                    @show-full-detail="openFullProductDetail"
                 />
                 <ProductSetDialog
                     v-if="selectedProductCode && selectedProductIsSet"
                     v-model:visible="showProductDialog"
                     :itemCode="selectedProductCode"
                     :baseZIndex="DIALOG_Z_INDEX"
+                    @show-full-detail="openFullProductDetail"
                 />
+                <ProductFullDetailDialog v-model:visible="fullDetail" :item-code="selectedProductCode"
+                    :selection="fullSelection" :baseZIndex="DIALOG_Z_INDEX" />
             </div>
         </Transition>
     </Teleport>
@@ -303,7 +317,7 @@ onBeforeUnmount(() => {
     position: relative;
     display: flex;
     flex-direction: column;
-    width: min(420px, 100vw);
+    width: min(640px, 100vw);
     height: 100%;
     background: var(--market-card-bg, #fff);
     box-shadow: -18px 0 42px rgba(15, 23, 42, 0.18);
@@ -486,9 +500,10 @@ onBeforeUnmount(() => {
 
 .cart-overlay-foot {
     flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+    align-items: center;
+    gap: 0.5rem 1rem;
     padding: 0.9rem 1.1rem calc(0.9rem + var(--app-safe-bottom, 0px));
     border-top: 1px solid var(--market-card-border, #e2e8f0);
     background: var(--market-card-bg, #fff);
@@ -509,8 +524,7 @@ onBeforeUnmount(() => {
 }
 
 .cart-overlay-sum--sub {
-    font-size: 0.76rem;
-    color: var(--market-muted, #94a3b8);
+    display: none;
 }
 
 .cart-overlay-cta {
@@ -545,6 +559,25 @@ onBeforeUnmount(() => {
     }
 }
 
+.cart-overlay-head, .cart-overlay-foot { background:linear-gradient(105deg,var(--market-header-bg,#fff),var(--market-primary-soft,#edf6f0)); }
+.cart-overlay-head { justify-content:flex-start; gap:.75rem; }
+.cart-mark { font-size:1.5rem; color:var(--market-primary); }
+.cart-overlay-close { margin-inline-start:auto; }
+.cart-overlay-product { padding:.8rem 1rem; border-bottom:1px solid var(--market-card-border); }
+.cart-group-title { display:flex; align-items:center; gap:.8rem; text-align:start; background:transparent; border:0; padding:0; }
+.cart-group-title img { width:52px; height:52px; object-fit:contain; border:1px solid var(--market-card-border); border-radius:.6rem; }
+.cart-unit-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto 2rem; align-items:center; gap:.6rem; margin-top:.7rem; }
+.cart-unit-editor { min-width:0; }
+.cart-unit-row small { display:block; color:var(--market-muted); font-size:.8rem; }
+.cart-unit-total { color:var(--market-primary); }
+.cart-overlay-foot .cart-overlay-sum { display:block; }
+.cart-overlay-foot .cart-overlay-sum--sub { display:none; }
+.cart-overlay-foot .cart-overlay-sum > span { display:block; font-size:.74rem; }
+.cart-overlay-foot .cart-overlay-sum strong { display:block; font-size:1.45rem; }
+.cart-overlay-foot > p { grid-column:1 / -1; }
+.cart-overlay-head h2 { font-size:1.45rem; }
+.cart-overlay-head { padding-block:.85rem; }
+.cart-overlay-cta { border-radius:8px; }
 .cart-overlay-enter-active,
 .cart-overlay-leave-active {
     transition: opacity 0.18s ease;
@@ -572,5 +605,18 @@ onBeforeUnmount(() => {
     .cart-overlay-leave-active .cart-overlay-panel {
         transition: none;
     }
+}
+.basket-page { position:relative; inset:auto; z-index:auto; height:calc(100dvh - 9rem); max-width:1100px; margin:auto; }
+.basket-page .cart-overlay-panel { width:100%; box-shadow:none; }
+.basket-page .cart-overlay-list { padding:12px; }
+.basket-page .cart-overlay-product { border:1px solid var(--market-card-border); border-radius:12px; margin-bottom:10px; padding:14px; }
+.cart-unit-row.editing { background:var(--market-primary-soft); border-radius:8px; }
+@media(max-width:900px) {
+    .basket-page { position:fixed; inset:var(--market-header-height,4rem) 0 calc(var(--market-mobile-nav-height,64px) + env(safe-area-inset-bottom)); height:auto; }
+    .cart-unit-row.editing { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:'label label' 'editor editor' 'total remove'; padding:.5rem; row-gap:.3rem; }
+    .cart-unit-row.editing .cart-unit-label { grid-area:label; }
+    .cart-unit-row.editing .cart-unit-editor { grid-area:editor; justify-self:end; }
+    .cart-unit-row.editing .cart-unit-total { grid-area:total; }
+    .cart-unit-row.editing .cart-overlay-remove { grid-area:remove; }
 }
 </style>

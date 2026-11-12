@@ -2,7 +2,6 @@
 
 <script setup>
 import returnIcon from '@/assets/retun.png';
-import CartQtyStepper from '@/components/product/CartQtyStepper.vue';
 import { useSilentRefresh } from '@/composables/useSilentRefresh';
 import ProductService from '@/services/ProductService';
 import { useAuthenStore } from '@/stores/authen';
@@ -20,7 +19,7 @@ import OverlayPanel from 'primevue/overlaypanel';
 import ProgressSpinner from 'primevue/progressspinner';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 const props = defineProps({
@@ -39,18 +38,16 @@ const props = defineProps({
     }
 });
 
-const emit = defineEmits(['update:visible', 'added-to-cart', 'favorite-changed', 'show-full-detail']);
+const emit = defineEmits(['closed', 'update:visible', 'added-to-cart', 'favorite-changed', 'show-full-detail']);
 
 const router = useRouter();
 const product = ref(null);
 const images = ref([]);
-// 🚨 ความหมายเปลี่ยนแล้ว (รีวิว 260908 สไลด์ 2): เดิมคือ "จำนวนที่จะเพิ่ม"
-// ตอนนี้คือ "จำนวนรวมในตะกร้าของหน่วยที่เลือก" เพราะไม่มีปุ่มยืนยันแล้ว
-// กด +/- แล้วเขียนลงตะกร้าเลย ค่าที่เห็นจึงต้องตรงกับตะกร้าเสมอ
-const quantity = ref('0');
+// Quantity to add for the selected unit.
+const quantity = ref(1);
 const loading = ref(true);
 const priceLoading = ref(false);
-const cartQtyStepper = ref(null);
+
 // แยกสถานะบันทึกตามสินค้า+หน่วย เพื่อไม่ให้ request ของแพ็คไปล็อก/กระพริบที่ลัง
 const pendingCartKeys = ref(new Set());
 const toast = useToast();
@@ -61,9 +58,26 @@ const selectedUnitIndex = ref(0);
 const shareOverlay = ref(null); // อ้างอิงถึง OverlayPanel สำหรับแชร์
 const showFullDescription = ref(false); // สำหรับควบคุมการแสดงรายละเอียดแบบเต็ม
 const isFullScreenDetail = ref(false);
+const isMobile = ref(typeof window !== 'undefined' && window.innerWidth <= 640);
+const updateViewport = () => { isMobile.value = window.innerWidth <= 640; };
+const mobileImageIndex = ref(0);
+const photoTrack = ref(null);
+const thumbnailRail = ref(null);
+function choosePhoto(index) {
+    photoTrack.value?.scrollTo({ left: index * photoTrack.value.clientWidth, behavior: 'smooth' });
+    mobileImageIndex.value = index;
+}
+function trackMobileImage(event) {
+    const track = event.target;
+    if (track.clientWidth) mobileImageIndex.value = Math.max(0, Math.min(images.value.length - 1, Math.round(track.scrollLeft / track.clientWidth)));
+}
+watch(mobileImageIndex, (index) => {
+    thumbnailRail.value?.children[index]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+});
 
 const authenStore = useAuthenStore();
-const isLoggedIn = computed(() => authenStore.isAuthenticated);
+const needsCustomer = computed(() => authenStore.userType === 'employee' && !authenStore.userCode);
+const isLoggedIn = computed(() => authenStore.isAuthenticated && !needsCustomer.value);
 function getProductDisplayName(item) {
     return pickProductName(item, languageStore.locale) || item?.display_name || item?.item_name || item?.name || '';
 }
@@ -108,10 +122,10 @@ const currentSalesText = computed(() => {
 const dialogStyle = computed(() =>
     isFullScreenDetail.value
         ? { width: '100vw', maxWidth: '100vw', height: '100dvh', maxHeight: '100dvh', padding: 0 }
-        : { width: '95vw', maxWidth: '960px', padding: 0 }
+        : { width: '95vw', maxWidth: '1120px', padding: 0 }
 );
-const dialogBreakpoints = computed(() => (isFullScreenDetail.value ? {} : { '960px': '95vw', '640px': '100vw' }));
-const dialogClass = computed(() => ['product-detail-dialog', { 'product-detail-dialog--fullscreen': isFullScreenDetail.value }]);
+const dialogBreakpoints = computed(() => (isFullScreenDetail.value ? {} : { '1120px': '95vw', '900px': '100vw' }));
+const dialogClass = computed(() => ['product-detail-dialog', 'spd-quick-order', { 'product-detail-dialog--fullscreen': isFullScreenDetail.value }]);
 
 // สำหรับการแชร์
 const shareItems = computed(() => [
@@ -177,8 +191,7 @@ const quantityInCart = computed(() => {
     return item ? toOrderQty(item.qty) : 0;
 });
 
-// quantity คือจำนวนรวมในตะกร้าอยู่แล้ว จึงไม่ต้องบวกของเดิมซ้ำ
-const totalSelectedWithCart = computed(() => toOrderQty(quantity.value));
+const totalSelectedWithCart = computed(() => quantityInCart.value + toOrderQty(quantity.value));
 
 // Maximum Allowance = จำนวนสั่งสูงสุดต่อคำสั่งซื้อ กำหนดต่อหน่วย (REQ3)
 // null = ไม่จำกัด · server บังคับซ้ำอีกชั้นที่ /sendorder
@@ -215,7 +228,6 @@ const remainingStockToAdd = computed(() => {
     return Math.max(0, maxStock - toOrderQty(inCartQty));
 });
 
-// สต็อกทั้งหมดของหน่วยนี้ (ไม่หักของที่อยู่ในตะกร้า) — quantity เป็นยอดรวมแล้ว
 const maxStockForUnit = computed(() => {
     if (!currentUnit.value) return 0;
     const stock = toStockQty(currentUnit.value.balance_qty);
@@ -245,6 +257,8 @@ const cartUnitLines = computed(() =>
 );
 const cartUnitSummaryText = computed(() => formatCartUnitSummary(cartUnitLines.value));
 const hasAnyUnitInCart = computed(() => cartUnitLines.value.length > 0);
+const unitConversion = unitRatioText;
+const cartUnits = cartUnitSummaryText;
 
 const hasReachedMaxAllowance = computed(() => remainingAllowanceToAdd.value !== null && remainingAllowanceToAdd.value <= 0);
 const remainingAddableQty = computed(() => getRemainingAddableQty(remainingStockToAdd.value, remainingAllowanceToAdd.value));
@@ -377,7 +391,8 @@ watch(
             // รีเซ็ตค่าต่างๆ
             product.value = null;
             images.value = [];
-            quantity.value = '1';
+            mobileImageIndex.value = 0;
+            quantity.value = 1;
             selectedUnitIndex.value = 0;
             showFullDescription.value = false;
             isFullScreenDetail.value = false;
@@ -393,20 +408,22 @@ watch(
 );
 
 onMounted(() => {
+    window.addEventListener('resize', updateViewport);
     // หากมี itemCode และ visible = true ตั้งแต่เริ่มต้น ให้โหลดข้อมูล
     if (props.visible && props.itemCode) {
         fetchProductDetail().finally(() => silentRefresh.start());
     }
 });
+onBeforeUnmount(() => window.removeEventListener('resize', updateViewport));
 
 function goToLogin() {
     emit('update:visible', false);
-    router.push('/auth/login');
+    router.push(needsCustomer.value ? { path: '/auth/login', query: { mode: 'employee', selectCustomer: '1', redirect: '/marketplace' } } : '/auth/login');
 }
 
 function goToProductPage() {
     if (!product.value?.code) return;
-    emit('show-full-detail', product.value.code);
+    emit('show-full-detail', product.value.code, { unitCode: currentUnit.value?.unit_code, qty: quantity.value });
     closeDialog();
 }
 
@@ -560,7 +577,10 @@ async function fetchProductImages() {
     }
 }
 
+const priceUnavailable = ref(false);
+let priceRevision = 0;
 async function refreshSelectedUnitPrice(options = {}) {
+    const revision = ++priceRevision;
     if (!isLoggedIn.value || !product.value || !currentUnit.value) return;
 
     const unitSource = getSelectedUnitSource();
@@ -570,10 +590,12 @@ async function refreshSelectedUnitPrice(options = {}) {
     const silent = options.silent === true;
     if (!silent) priceLoading.value = true;
     try {
-        const priceResult = await ProductService.getProductPrice(product.value.code, unitSource.unit_code, quantity.value || '1', localStorage.getItem('_userCode') || '', {
+        const priceResult = await ProductService.getProductPrice(product.value.code, unitSource.unit_code, totalSelectedWithCart.value || 1, localStorage.getItem('_userCode') || '', {
             barcode: unitSource.barcode || product.value.barcode || ''
         });
 
+        if (revision !== priceRevision) return;
+        priceUnavailable.value = !priceResult;
         if (priceResult) {
             unitSource.price = priceResult.price ?? unitSource.price;
             unitSource.type = priceResult.type ?? unitSource.type;
@@ -581,9 +603,11 @@ async function refreshSelectedUnitPrice(options = {}) {
             unitSource.price_type = priceResult.roworder ?? priceResult.price_type ?? unitSource.price_type;
         }
     } catch (error) {
+        if (revision !== priceRevision) return;
+        priceUnavailable.value = true;
         console.warn(`Unable to refresh price for ${product.value.code}/${unitSource.unit_code}`, error);
     } finally {
-        if (!silent) priceLoading.value = false;
+        if (revision === priceRevision) priceLoading.value = false;
     }
 }
 
@@ -593,7 +617,7 @@ const preorderPreview = computed(() => {
     if (!currentUnit.value) return { readyQty: 0, preorderQty: 0, totalQty: 0, hasPreorder: false, isBlockedByPreorderSetting: false };
     return getPreorderSplit({
         qty: toOrderQty(quantity.value),
-        balance_qty: maxStockForUnit.value,
+        balance_qty: remainingStockToAdd.value,
         preorder_allowed: currentUnit.value.preorder_allowed
     });
 });
@@ -615,7 +639,53 @@ const preorderActionHint = computed(() => {
 
 const currentPrice = computed(() => toDialogNumber(currentUnit.value?.price, 0));
 
-const hasValidPrice = computed(() => !isLoggedIn.value || currentPrice.value > 0);
+const hasValidPrice = computed(() => !isLoggedIn.value || (!priceUnavailable.value && currentPrice.value > 0));
+const addingToCart = isCurrentCartUnitBusy;
+const quantityAtMaxStock = computed(() => {
+    const cap = maxCartQtyForUnit.value;
+    return cap !== null && totalSelectedWithCart.value >= cap;
+});
+const addToCartDisabled = computed(() => isLoggedIn.value && (
+    !currentUnit.value || isSoldOut.value || !hasValidPrice.value || priceLoading.value ||
+    addingToCart.value || toOrderQty(quantity.value) < 1 || exceedsMaxAllowance.value || exceedsAvailableStock.value
+));
+const addToCartLabel = computed(() => {
+    if (addingToCart.value) return t('productDetail.addingToCart');
+    if (hasReachedMaxAllowance.value) return t('productDetail.maxAllowanceReached');
+    if (preorderPreview.value.isBlockedByPreorderSetting || exceedsMaxAllowance.value || exceedsAvailableStock.value) return t('productDetail.adjustQtyToStock');
+    if (preorderPreview.value.hasPreorder) return t('productDetail.addToCartWithPreorder', {
+        ready: preorderPreview.value.readyQty, preorder: preorderPreview.value.preorderQty
+    });
+    return isMobile.value && languageStore.locale === 'th' ? 'ใส่รถเข็น' : t('productDetail.addToCartAlt');
+});
+const availabilityNote = computed(() => {
+    if (!isLoggedIn.value || !currentUnit.value || isSoldOut.value) return null;
+    const unit = currentUnit.value.unit_code;
+    if (hasReachedMaxAllowance.value) return { tone: 'warning', title: t('productDetail.maxAllowanceReached'), detail: '' };
+    if (exceedsMaxAllowance.value) return { tone: 'warning', title: t('productDetail.quantityOverLimit'), detail: '' };
+    if (preorderPreview.value.isBlockedByPreorderSetting) return { tone: 'warning', title: t('productDetail.adjustQtyToStock'), detail: '' };
+    if (preorderPreview.value.hasPreorder) return { tone: 'preorder', title: t('productDetail.preorderLabel'), detail: t('productDetail.fulfillmentSplit', {
+        ready: preorderPreview.value.readyQty, preorder: preorderPreview.value.preorderQty, unit
+    }) };
+    return { tone: 'ready', title: `${t('productDetail.readyNow')} ${preorderPreview.value.readyQty} ${unit}`, detail: '' };
+});
+
+function getNumericQuantity() { return toOrderQty(quantity.value); }
+function incrementQuantity() {
+    if (isSoldOut.value || quantityAtMaxStock.value) return;
+    quantity.value = getNumericQuantity() + 1;
+}
+function decrementQuantity() { quantity.value = Math.max(1, getNumericQuantity() - 1); }
+function validateQuantity() {
+    const entered = getNumericQuantity() || 1;
+    const cap = maxCartQtyForUnit.value;
+    quantity.value = cap === null ? entered : Math.max(1, Math.min(entered, cap - quantityInCart.value));
+}
+function handleQuantityKeydown(event) {
+    if (!/^[0-9]$/.test(event.key) && !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(event.key)) event.preventDefault();
+    if (event.key === 'Enter') event.target.blur();
+}
+function addToCart() { if (!addToCartDisabled.value) addSelectedQuantity(); }
 
 function toggleShareMenu(event) {
     shareOverlay.value.toggle(event);
@@ -675,56 +745,23 @@ function copyLink() {
     shareOverlay.value.hide();
 }
 
-// ดึงจำนวนจริงของหน่วยที่เลือกจากตะกร้ามาใส่ stepper
-// เรียกทุกครั้งหลังยิง API และเมื่อสลับหน่วย/โหลดสินค้าใหม่
-function syncQuantityFromCart() {
-    quantity.value = String(quantityInCart.value);
-}
-
-// สลับหน่วย / ตะกร้าเปลี่ยนจากที่อื่น → เลขบน stepper ต้องตามทันที
-watch(quantityInCart, syncQuantityFromCart, { immediate: true });
-
-// เขียนจำนวนใหม่ลงตะกร้าโดยตรง — nextQty คือ "จำนวนรวมที่ต้องการ" ไม่ใช่ส่วนต่าง
-// (cartStore.addToCart ตีความแบบสัมบูรณ์อยู่แล้ว ดู cartStore.js:389)
-function commitCartQty(nextQty) {
+function addSelectedQuantity() {
     if (!product.value) return;
     if (!isLoggedIn.value) {
         goToLogin();
         return;
     }
 
-    // จับหน่วยไว้ตั้งแต่เข้าฟังก์ชัน หลัง CartQtyStepper flush ก่อน changeUnit
-    // ห้ามอ่าน currentUnit ใหม่หลังเริ่มงาน async เพราะผู้ใช้อาจสลับหน่วยไปแล้ว
     const unit = currentUnit.value;
     if (!unit) return;
     const pendingKey = cartUnitKey(unit);
     if (pendingCartKeys.value.has(pendingKey)) return;
 
-    const requested = Math.max(0, Math.trunc(Number(nextQty) || 0));
-
-    // ลดจนเหลือ 0 = เอาออกจากตะกร้า
-    if (requested === 0) {
-        const line = cartStore.cartItems.find((item) => item.item_code === (unit.item_code || product.value.code) && item.unit_code === unit.unit_code);
-        if (!line) return;
-        setCartUnitBusy(pendingKey, true);
-        cartStore
-            .removeFromCart(line.guid_code || line.id)
-            .catch((err) => {
-                console.error('Error removing from cart:', err);
-                toast.add({ severity: 'error', summary: t('productDetail.error'), detail: t('productDetail.addCartFailed'), life: 3000 });
-            })
-            .finally(() => {
-                setCartUnitBusy(pendingKey, false);
-                syncQuantityFromCart();
-            });
-        return;
-    }
-
-    // ปุ่มยืนยันหายไปแล้ว การกัน "สั่งเกิน" จึงต้องมาอยู่ตรงนี้แทน
+    const requested = totalSelectedWithCart.value;
+    if (!hasValidPrice.value || priceLoading.value || quantity.value < 1) return;
     const cap = maxCartQtyForUnit.value;
     const finalQty = cap === null ? requested : Math.min(requested, cap);
     if (finalQty <= 0) {
-        syncQuantityFromCart();
         return;
     }
     if (finalQty < requested) {
@@ -745,7 +782,6 @@ function commitCartQty(nextQty) {
             detail: t('productDetail.selectUnitAgain'),
             life: 3000
         });
-        syncQuantityFromCart();
         return;
     }
     const cartItem = {
@@ -782,14 +818,8 @@ function commitCartQty(nextQty) {
         .then(() => {
             // แจ้งให้คอมโพเนนต์แม่ทราบว่ามีการเพิ่มสินค้าลงตะกร้าแล้ว
             emit('added-to-cart', cartItem);
+            toast.add({ severity: 'success', summary: t('productDetail.addedToCart'), detail: cartItem.item_name, life: 1800 });
 
-            // แสดง toast แจ้งเตือน
-            // toast.add({
-            //     severity: 'success',
-            //     summary: 'เพิ่มสินค้าแล้ว',
-            //     detail: `เพิ่ม ${cartItem.name} ลงในตะกร้าแล้ว`,
-            //     life: 3000
-            // });
         })
         .catch((err) => {
             console.error('Error adding to cart:', err);
@@ -802,19 +832,18 @@ function commitCartQty(nextQty) {
         })
         .finally(() => {
             setCartUnitBusy(pendingKey, false);
-            // ดึงค่าจริงจากตะกร้ากลับมา — สำเร็จก็ตรงอยู่แล้ว ล้มเหลวก็เด้งกลับค่าเดิม
-            syncQuantityFromCart();
         });
 }
 
 // เปลี่ยนหน่วยสินค้า
-// 🚨 ห้ามรีเซ็ตเป็น '1' อีก — ไม่มีปุ่มยืนยันแล้ว การตั้งค่าเองจะกลายเป็น
-//    การสั่งซื้อโดยที่ผู้ใช้ไม่ได้กด ปล่อยให้ watcher ด้านล่างดึงจำนวนจริง
-//    ของหน่วยใหม่จากตะกร้ามาแทน (0 ถ้าหน่วยนั้นยังไม่มีในตะกร้า)
+watch([totalSelectedWithCart, selectedUnitIndex], () => {
+    if (!loading.value) refreshSelectedUnitPrice();
+});
+
 function changeUnit(index) {
-    if (index !== selectedUnitIndex.value) cartQtyStepper.value?.flushPending();
+    if (index === selectedUnitIndex.value) return;
+    quantity.value = 1;
     selectedUnitIndex.value = index;
-    refreshSelectedUnitPrice();
 }
 
 // ฟังก์ชันเปลี่ยนสถานะรายการโปรด
@@ -873,9 +902,10 @@ const dialogVisible = computed({
         :breakpoints="dialogBreakpoints"
         :closable="true"
         :closeOnEscape="true"
-        :dismissableMask="true"
-        :baseZIndex="baseZIndex"
         :showHeader="false"
+        :blockScroll="isMobile"
+        :draggable="false"
+        :aria-label="t('productDetail.productDetail')"
         @hide="closeDialog"
         :class="dialogClass"
     >
@@ -893,6 +923,10 @@ const dialogVisible = computed({
             </div>
 
         </OverlayPanel>
+
+        <button v-if="isMobile" type="button" class="spd-close-btn mobile-photo-close" :aria-label="t('productDetail.close')" @click="closeDialog">
+            <i class="pi pi-times" aria-hidden="true"></i>
+        </button>
 
         <!-- Loading -->
         <div v-if="loading" class="flex justify-center items-center" style="min-height:360px">
@@ -923,10 +957,26 @@ const dialogVisible = computed({
                         <div v-if="product.is_return === '1'" class="spd-return-badge">
                             <img :src="returnIcon" :alt="t('productDetail.returnAlt')" style="height:58px;width:auto" />
                         </div>
-                        <!-- Galleria -->
-                        <Galleria
+                        <template v-if="isMobile">
+                            <div ref="photoTrack" class="mobile-photo-track" tabindex="0" :aria-label="productDisplayName" @scroll.passive="trackMobileImage">
+                                <img v-for="(image, index) in images" :key="index" class="spd-main-img" :src="image.itemImageSrc"
+                                    :alt="productDisplayName || image.alt" draggable="false" @error="$event.target.src = ProductService.getPlaceholderImage()" />
+                            </div>
+                            <span v-if="images.length" class="mobile-photo-count">{{ mobileImageIndex + 1 }} / {{ images.length }}</span>
+                            <div v-if="images.length > 1" ref="thumbnailRail" class="mobile-thumb-rail">
+                                <button v-for="(image, index) in images" :key="image.guid_code || index" type="button"
+                                    :aria-label="(productDisplayName || t('common.product')) + ' ' + (index + 1) + '/' + images.length"
+                                    :aria-pressed="mobileImageIndex === index" @click="choosePhoto(index)">
+                                    <img :src="image.thumbnailImageSrc" alt="" @error="$event.target.src = ProductService.getPlaceholderImage()" />
+                                </button>
+                            </div>
+                        </template>
+                        <Galleria v-else
                             :value="images"
-                            :numVisible="5"
+                            thumbnailsPosition="left"
+                            :numVisible="Math.min(images.length || 1, 3)"
+                            :verticalThumbnailViewPortHeight="`calc(var(--spd-thumb-slot) * ${Math.min(images.length, 3)})`"
+                            :showThumbnailNavigators="images.length > 3"
                             :circular="true"
                             :showThumbnails="images.length > 1"
                             :showItemNavigators="images.length > 1"
@@ -954,7 +1004,7 @@ const dialogVisible = computed({
                     </div>
 
                     <!-- รายละเอียดสินค้า: desktop/tablet แสดงใต้รูป -->
-                    <div v-if="product.description" class="spd-desc-box spd-left-desc-box">
+                    <div v-if="safeProductDescription" class="spd-desc-box spd-left-desc-box">
                         <div class="spd-desc-title">{{ t('productDetail.productDetail') }}</div>
                         <div :class="['spd-desc-text', !showFullDescription ? 'spd-desc-clamp' : '']" v-html="safeProductDescription"></div>
                         <button v-if="shouldShowMoreButton" type="button" class="spd-more-btn" :aria-expanded="showFullDescription" @click="showFullDescription = !showFullDescription">
@@ -1023,17 +1073,51 @@ const dialogVisible = computed({
                         {{ t('productDetail.noUnitPrice') }}
                     </div>
 
+                    <!-- ── โปรโมชั่น ── -->
+                    <div v-if="isLoggedIn && formattedPromotions.length > 0" class="spd-row spd-promo-row-wrap">
+                        <div class="spd-row-label">{{ t('productDetail.promotion') }}</div>
+                        <div class="spd-promo-list">
+                            <div
+                                v-for="(promo, idx) in formattedPromotions"
+                                :key="idx"
+                                class="spd-promo-item"
+                            >
+                                <span class="spd-promo-tag">{{ promo.displayText }}</span>
+                                <span class="spd-promo-price">฿{{ promo.formattedPrice }}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ── ส่วนลด ── -->
+                    <div v-if="isLoggedIn && formattedDiscountPromotions.length > 0" class="spd-row spd-promo-row-wrap">
+                        <div class="spd-row-label">{{ t('productDetail.discount') }}</div>
+                        <div class="spd-promo-list">
+                            <div
+                                v-for="(promo, idx) in formattedDiscountPromotions"
+                                :key="idx"
+                                class="spd-promo-item spd-discount-promo-item"
+                            >
+                                <span class="spd-promo-tag spd-discount-promo-tag">{{ promo.displayText }}</span>
+                                <span class="spd-promo-price spd-discount-promo-value">{{ promo.discountText }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="promotionDetailHtml" class="spd-custom-offer">
+                        <div class="spd-row-label">{{ t('productDetail.promotion') }}</div>
+                        <div v-html="promotionDetailHtml"></div>
+                    </div>
+
                     <!-- ── หน่วยสินค้า ── -->
                     <div v-if="product.otherUnits && product.otherUnits.length > 0" class="spd-row">
                         <div class="spd-row-label">{{ t('productDetail.productUnit') }}</div>
-                        <div class="flex flex-wrap gap-2">
+                        <div class="unit-options">
                             <button
                                 type="button"
                                 :class="['spd-unit-btn', selectedUnitIndex === 0 ? 'spd-unit-btn--active' : '']"
                                 :aria-pressed="selectedUnitIndex === 0"
                                 :aria-label="`${t('productDetail.selectUnit')} ${product.unit_code}`"
                                 @click="changeUnit(0)"
-                            >{{ product.unit_code }}</button>
+                            ><i class="pi pi-box" aria-hidden="true"></i><span>{{ product.unit_code }}</span><i v-if="selectedUnitIndex === 0" class="pi pi-check unit-check" aria-hidden="true"></i></button>
                             <button
                                 v-for="(unitItem, idx) in product.otherUnits"
                                 :key="idx"
@@ -1042,39 +1126,7 @@ const dialogVisible = computed({
                                 :aria-pressed="selectedUnitIndex === idx + 1"
                                 :aria-label="`${t('productDetail.selectUnit')} ${unitItem.unit_code}`"
                                 @click="changeUnit(idx + 1)"
-                            >{{ unitItem.unit_code }}</button>
-                        </div>
-                    </div>
-
-                    <!-- ตัวคูณหน่วย — ลูกค้าไม่รู้ว่า 1 ลังมีกี่แพ็ค (รีวิว 260908 สไลด์ 1) -->
-                    <div v-if="unitRatioText" class="spd-unit-ratio">
-                        <i class="pi pi-box"></i>
-                        <span>{{ unitRatioText }}</span>
-                    </div>
-
-                    <!-- ── รายละเอียดโปรโมชั่นที่แอดมินพิมพ์เอง (dimension_39) ── -->
-                    <div v-if="promotionDetailHtml" class="spd-offer-box is-custom">
-                        <div class="spd-offer-title">{{ t('productDetail.promotion') }}</div>
-                        <!-- eslint-disable-next-line vue/no-v-html -- ผ่าน sanitizeProductDescription แล้ว
-                             ตัวเดียวกับที่ใช้กับช่องรายละเอียดสินค้า -->
-                        <div class="spd-offer-html" v-html="promotionDetailHtml"></div>
-                    </div>
-
-                    <!-- ── โปรโมชั่นของหน่วยที่เลือก ── -->
-                    <div v-if="isLoggedIn && formattedPromotions.length > 0" class="spd-offer-box">
-                        <div class="spd-offer-title">{{ t('productDetail.promotion') }}</div>
-                        <div v-for="(promo, idx) in formattedPromotions" :key="idx" class="spd-offer-line">
-                            <span>{{ promo.displayText }}</span>
-                            <strong>฿{{ promo.formattedPrice }}</strong>
-                        </div>
-                    </div>
-
-                    <!-- ── ส่วนลดของหน่วยที่เลือก ── -->
-                    <div v-if="isLoggedIn && formattedDiscountPromotions.length > 0" class="spd-offer-box is-discount">
-                        <div class="spd-offer-title">{{ t('productDetail.discount') }}</div>
-                        <div v-for="(promo, idx) in formattedDiscountPromotions" :key="idx" class="spd-offer-line">
-                            <span>{{ promo.displayText }}</span>
-                            <strong>{{ promo.discountText }}</strong>
+                            ><i class="pi pi-box" aria-hidden="true"></i><span>{{ unitItem.unit_code }}</span><i v-if="selectedUnitIndex === idx + 1" class="pi pi-check unit-check" aria-hidden="true"></i></button>
                         </div>
                     </div>
 
@@ -1087,63 +1139,25 @@ const dialogVisible = computed({
                     </div>
 
                     <!-- ── ในตะกร้า ── -->
-                    <!-- แสดงทุกหน่วยที่มีในตะกร้า ไม่ใช่เฉพาะหน่วยที่เลือกอยู่ -->
-                    <div v-if="hasAnyUnitInCart" class="spd-incart-bar">
-                        <i class="pi pi-shopping-cart mr-1"></i>
-                        {{ t('productDetail.inCart') }} <strong class="mx-1">{{ cartUnitSummaryText }}</strong>
-                        <span v-if="hasReachedMaxAllowance" class="ml-auto text-xs" style="color:#888">{{ t('productDetail.maxAllowanceReached') }}</span>
-                        <span v-else-if="shouldShowStock && remainingAddableQty >= 0" class="ml-auto text-xs" style="color:#888">{{ t('productDetail.addMore', { qty: remainingAddableQty }) }}</span>
-                    </div>
-
-                    <!-- ── จำนวน ── -->
-                    <div class="spd-row spd-qty-row">
-                        <div class="spd-row-label">{{ t('productDetail.quantity') }}</div>
-                        <!-- กด +/- แล้วเข้า/ออกตะกร้าทันที ไม่มีปุ่มยืนยันอีกแล้ว -->
-                        <CartQtyStepper
-                            ref="cartQtyStepper"
-                            :model-value="quantityInCart"
-                            :max="maxCartQtyForUnit"
-                            :busy="isCurrentCartUnitBusy"
-                            :disabled="!isLoggedIn || (isSoldOut && quantityInCart === 0) || !hasValidPrice || priceLoading"
-                            :decrease-label="t('productDetail.decreaseQuantityAria')"
-                            :increase-label="t('productDetail.increaseQuantityAria')"
-                            :input-label="t('productDetail.quantityAria')"
-                            @commit="commitCartQty"
-                        />
-                    </div>
-
-                    <!-- จำนวนสั่งสูงสุดต่อคำสั่งซื้อ (REQ3) -->
-                    <div v-if="maxAllowanceForUnit !== null && currentUnit" class="spd-max-allowance" :class="{ 'is-exceeded': exceedsMaxAllowance }">
-                        <i class="pi pi-info-circle"></i>
-                        <span>{{ t('productDetail.maxAllowanceHint', { max: maxAllowanceForUnit, unit: currentUnit.unit_code }) }}</span>
-                    </div>
-
-                    <div v-if="isLoggedIn && currentUnit && !isSoldOut && preorderPreview.totalQty > 0" class="spd-preorder-preview" :class="{ 'has-preorder': preorderPreview.hasPreorder }">
-                        <div>
-                            <span>{{ t('productDetail.readyNow') }}</span>
-                            <strong>{{ preorderPreview.readyQty }} {{ currentUnit.unit_code }}</strong>
+                    <div v-if="unitConversion || cartUnits" class="spd-unit-summary">
+                        <div v-if="unitConversion" class="spd-unit-summary-line" style="color:grey">{{ unitConversion }}</div>
+                        <div v-if="cartUnits" class="spd-unit-summary-line">
+                            <i class="pi pi-shopping-cart" aria-hidden="true"></i>
+                            {{ t('productDetail.cartUnits') }}: {{ cartUnits }}
                         </div>
-                        <div v-if="preorderPreview.hasPreorder">
-                            <span>{{ t('productDetail.preorderLabel') }}</span>
-                            <strong>{{ preorderPreview.preorderQty }} {{ currentUnit.unit_code }}</strong>
-                        </div>
-                        <div v-else-if="preorderPreview.isBlockedByPreorderSetting" class="is-blocked">
-                            <span>{{ t('productDetail.preorderLabel') }}</span>
-                            <strong>{{ t('productDetail.preorderNotAllowed') }}</strong>
-                        </div>
-                        <p v-if="preorderActionHint" class="spd-preorder-hint">{{ preorderActionHint }}</p>
                     </div>
-
-                    <!-- ── ปุ่ม action ── -->
-                    <!-- แถบปุ่มล่างเหลือไว้เฉพาะตอนยังไม่ล็อกอิน (ปุ่มเข้าสู่ระบบ)
-                         ล็อกอินแล้วไม่มีปุ่มอะไรต้องกดที่นี่ — ตัวเพิ่ม/ลดจำนวนด้านบน
-                         เขียนลงตะกร้าเองแล้ว และปุ่มปิดอยู่มุมบนขวาของ dialog -->
-                    <div class="spd-actions" v-if="!isLoggedIn">
-                        <button class="spd-btn-buy w-full" type="button" @click="goToLogin">
-                            <i class="pi pi-sign-in mr-2"></i>{{ t('productDetail.loginToOrder') }}
+                    <div class="spd-availability-line">
+                        <div v-if="availabilityNote" class="spd-availability-note" :class="`is-${availabilityNote.tone}`" role="status" aria-atomic="true">
+                            <i class="pi pi-box" aria-hidden="true"></i>
+                            <div>
+                                <strong>{{ availabilityNote.title }}</strong>
+                                <p v-if="availabilityNote.detail">{{ availabilityNote.detail }}</p>
+                            </div>
+                        </div>
+                        <button v-if="isMobile" class="mobile-more" type="button" @click="goToProductPage">
+                            {{ t('productDetail.viewMoreShort') }} <i class="pi pi-angle-right" aria-hidden="true"></i>
                         </button>
                     </div>
-
                     <!-- ── แชร์ & รายการโปรด ── -->
                     <div class="spd-share-row">
                         <span class="spd-share-label">{{ t('productDetail.shareLabel') }}</span>
@@ -1155,12 +1169,51 @@ const dialogVisible = computed({
                         </button>
                     </div>
 
-                    <button class="spd-detail-page-btn" type="button" :aria-label="t('productDetail.viewMoreDetails')" @click="goToProductPage">
-                        <i class="pi pi-external-link"></i>
-                        {{ t('productDetail.viewMoreDetails') }}
-                    </button>
+
                 </div>
             </div>
+            <footer class="spd-order-footer" :class="{ 'spd-mobile-footer': isMobile }">
+                <button v-if="!isMobile" class="spd-detail-page-btn" type="button" :aria-label="t('productDetail.viewMoreDetails')" @click="goToProductPage">
+                    <i class="pi pi-external-link"></i>
+                    {{ t('productDetail.viewMoreDetails') }}
+                </button>
+                <div v-if="isLoggedIn" class="spd-row spd-qty-row">
+                    <div class="spd-row-label">{{ t('productDetail.quantity') }}</div>
+                    <div class="spd-qty-wrap">
+                        <button class="spd-qty-btn" type="button" :aria-label="t('productDetail.decreaseQuantityAria')" @click="decrementQuantity" :disabled="getNumericQuantity() <= 1">
+                            <i class="pi pi-minus"></i>
+                        </button>
+                        <input
+                            type="text"
+                            v-model="quantity"
+                            class="spd-qty-input"
+                            inputmode="numeric"
+                            :aria-label="t('productDetail.quantityAria')"
+                            @blur="validateQuantity"
+                            @keydown="handleQuantityKeydown"
+                        />
+                        <button class="spd-qty-btn" type="button" :aria-label="t('productDetail.increaseQuantityAria')" @click="incrementQuantity" :disabled="quantityAtMaxStock">
+                            <i class="pi pi-plus"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="spd-actions" v-if="isLoggedIn">
+                    <button
+                        class="spd-btn-cart"
+                        type="button"
+                        @click="addToCart"
+                        :disabled="addToCartDisabled"
+                    >
+                        <i :class="addingToCart || priceLoading ? 'pi pi-spin pi-spinner mr-2' : 'pi pi-shopping-cart mr-2'"></i>
+                        {{ addToCartLabel }}
+                    </button>
+                </div>
+                <div class="spd-actions" v-else>
+                    <button class="spd-btn-buy w-full" type="button" @click="goToLogin">
+                        <i class="pi pi-sign-in mr-2"></i>{{ t('productDetail.loginToOrder') }}
+                    </button>
+                </div>
+            </footer>
         </div>
 
         <!-- Empty -->
@@ -1172,6 +1225,8 @@ const dialogVisible = computed({
 </template>
 
 <style scoped>
+.spd-custom-offer { margin:.7rem 0; padding:.7rem .85rem; border:1px solid var(--market-card-border); border-radius:9px; background:var(--market-primary-soft); overflow-wrap:anywhere; }
+.spd-custom-offer :deep(p) { margin:.25rem 0; }
 /* ══════════════════════════════════════════════
    Dialog shell — Shopee-style clean white
 ══════════════════════════════════════════════ */
@@ -1462,62 +1517,40 @@ const dialogVisible = computed({
     padding-top: 2px;
 }
 
-/* ── โปรโมชั่น / ส่วนลด ── */
-.spd-offer-box {
-    margin: 10px 0;
-    border: 1px solid color-mix(in srgb, var(--spd-primary) 18%, #fff);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--spd-primary) 6%, #fff);
-    padding: 0.8rem;
+/* ── โปรโมชั่น ── */
+.spd-promo-row-wrap { align-items: flex-start; }
+.spd-promo-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
 }
-.spd-offer-box.is-custom {
-    border-color: #fed7aa;
-    background: #fff7ed;
-}
-.spd-offer-html {
-    color: var(--market-text, #4a3300);
-    font-size: 0.88rem;
-    line-height: 1.5;
-}
-.spd-offer-html :deep(p) {
-    margin: 0 0 0.35rem;
-}
-.spd-offer-html :deep(p:last-child) {
-    margin-bottom: 0;
-}
-.spd-offer-box.is-discount {
-    border-color: #bbf7d0;
-    background: #f0fdf4;
-}
-.spd-offer-title {
-    margin-bottom: 0.5rem;
-    color: var(--spd-primary);
-    font-size: 0.86rem;
-    font-weight: 900;
-}
-.spd-offer-box.is-discount .spd-offer-title,
-.spd-offer-box.is-discount strong {
-    color: #047857;
-}
-.spd-offer-line {
+.spd-promo-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.8rem;
-    border-radius: 0.6rem;
-    background: #fff;
-    padding: 0.55rem 0.65rem;
-    font-size: 0.86rem;
+    gap: 8px;
+    flex-wrap: wrap;
 }
-.spd-offer-line + .spd-offer-line {
-    margin-top: 0.45rem;
+.spd-promo-tag {
+    background: #fff0ee;
+    border: 1px solid #ee4d2d44;
+    color: #ee4d2d;
+    font-size: 0.9rem;
+    padding: 2px 8px;
+    border-radius: 2px;
 }
-.spd-offer-line span {
-    color: #334155;
+.spd-promo-price {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #ee4d2d;
 }
-.spd-offer-line strong {
-    color: var(--spd-primary);
-    white-space: nowrap;
+.spd-discount-promo-tag {
+    background: #ecfdf5;
+    border-color: #10b98144;
+    color: #059669;
+}
+.spd-discount-promo-value {
+    color: #059669;
 }
 
 /* ── หน่วย ── */
@@ -1581,41 +1614,47 @@ const dialogVisible = computed({
 
 /* ── จำนวน ── */
 .spd-qty-row { align-items: center; }
-
-/* ── ตัวคูณหน่วย: 1 ลัง = 8 แพ็ค ── */
-.spd-unit-ratio {
+.spd-qty-wrap {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    margin-top: 0.4rem;
-    font-size: 0.8rem;
-    color: var(--spd-muted, #6b7280);
+    border: 1px solid #d0d0d0;
+    border-radius: 2px;
+    overflow: hidden;
+    height: 36px;
 }
-.spd-unit-ratio i { font-size: 0.75rem; }
-
-/* ── จำนวนสั่งสูงสุดต่อคำสั่งซื้อ ── */
-.spd-max-allowance {
+.spd-qty-btn {
+    width: 36px;
+    height: 36px;
+    background: #f5f5f5;
+    border: none;
+    cursor: pointer;
+    color: #333;
+    font-size: 0.85rem;
     display: flex;
-    align-items: flex-start;
-    gap: 0.4rem;
-    margin-top: 0.5rem;
-    padding: 0.5rem 0.65rem;
-    border-radius: 6px;
-    background: #fff7ed;
-    border: 1px solid #fed7aa;
-    color: #9a3412;
-    font-size: 0.78rem;
-    line-height: 1.45;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.14s;
 }
-.spd-max-allowance i {
-    margin-top: 0.1rem;
-    flex: 0 0 auto;
+.spd-qty-btn:hover:not(:disabled) { background: #e8e8e8; }
+.spd-qty-btn:disabled { opacity: 0.4; cursor: default; }
+.spd-qty-input {
+    width: 52px;
+    text-align: center;
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #212121;
+    border: none;
+    border-left: 1px solid #d0d0d0;
+    border-right: 1px solid #d0d0d0;
+    outline: none;
+    height: 100%;
+    background: #fff;
+    padding: 0;
 }
-.spd-max-allowance.is-exceeded {
-    background: #fef2f2;
-    border-color: #fecaca;
-    color: #b91c1c;
-    font-weight: 600;
+.spd-stock-hint {
+    font-size: 0.75rem;
+    color: #999;
+    margin-left: 4px;
 }
 
 /* ── ปุ่ม action ── */
@@ -1624,6 +1663,23 @@ const dialogVisible = computed({
     gap: 12px;
     padding: 16px 0 8px;
 }
+.spd-btn-cart {
+    flex: 1;
+    height: 44px;
+    border: 1px solid #ee4d2d;
+    background: #fff0ee;
+    color: #ee4d2d;
+    font-size: 1.05rem;
+    font-weight: 500;
+    border-radius: 2px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.14s;
+}
+.spd-btn-cart:hover:not(:disabled) { background: #ffe4e0; }
+.spd-btn-cart:disabled { opacity: 0.45; cursor: default; }
 
 .spd-btn-buy {
     flex: 1;
@@ -1743,38 +1799,6 @@ const dialogVisible = computed({
 /* ══════════════════════════════════════════════
    Mobile
 ══════════════════════════════════════════════ */
-@media (max-width: 640px) {
-    :deep(.p-dialog) {
-        margin: 0;
-        height: 100dvh;
-        width: 100vw !important;
-        max-height: 100dvh;
-        border-radius: 0;
-    }
-    .spd-layout {
-        grid-template-columns: 1fr;
-    }
-
-    :deep(.product-detail-dialog--fullscreen) .spd-layout {
-        min-height: 100dvh;
-        height: auto;
-    }
-    .spd-img-col {
-        padding: 8px;
-    }
-    .spd-main-img-wrap {
-        max-height: 260px;
-    }
-    .spd-info-col {
-        padding: 16px;
-        max-height: none;
-    }
-    .spd-price { font-size: 1.5rem; }
-    .spd-actions { flex-direction: row; align-items: stretch; }
-    .spd-btn-buy { width: auto; flex: 1; }
-
-}
-
 /* Tablet */
 @media (min-width: 641px) and (max-width: 860px) {
     .spd-layout { grid-template-columns: 280px 1fr; }
@@ -2041,55 +2065,29 @@ input[type='number']::-webkit-outer-spin-button {
     color: var(--spd-primary);
 }
 
-.spd-preorder-preview {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    border: 1px solid var(--spd-border);
+.spd-qty-wrap {
     border-radius: var(--market-radius-md, 10px);
-    background: #fff;
-    padding: 10px;
-    margin: 2px 0 10px;
+    height: 40px;
+    width: 132px;
+    min-width: 132px;
+    flex: 0 0 132px;
+    align-self: flex-start;
 }
 
-.spd-preorder-preview > div {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--spd-primary) 6%, #fff);
-    padding: 8px 10px;
+.spd-qty-btn {
+    height: 40px;
+    width: 40px;
+    flex: 0 0 40px;
 }
 
-.spd-preorder-preview.has-preorder > div:nth-child(2) {
-    background: #fff7ed;
-    color: #c2410c;
+.spd-qty-input {
+    height: 40px;
+    width: 52px;
+    min-width: 52px;
+    max-width: 52px;
+    flex: 0 0 52px;
+    box-sizing: border-box;
 }
-
-.spd-preorder-preview .is-blocked {
-    background: #fff2f2;
-    color: #b91c1c;
-}
-
-.spd-preorder-preview span {
-    color: var(--spd-muted);
-    font-size: 0.75rem;
-    font-weight: 700;
-}
-
-.spd-preorder-preview strong {
-    color: inherit;
-    font-size: 0.95rem;
-}
-
-.spd-preorder-hint {
-    grid-column: 1 / -1;
-    margin: 0;
-    color: var(--spd-muted);
-    font-size: 0.78rem;
-    line-height: 1.45;
-}
-
 
 .spd-actions {
     position: sticky;
@@ -2098,6 +2096,25 @@ input[type='number']::-webkit-outer-spin-button {
     margin: 0 -24px;
     padding: 16px 24px 10px;
     background: linear-gradient(to top, #fff 84%, rgba(255, 255, 255, 0));
+}
+
+.spd-btn-cart,
+.spd-btn-buy {
+    min-height: 54px;
+    border-radius: var(--market-radius-md, 10px);
+    font-weight: 800;
+    font-size: 1rem;
+}
+
+.spd-btn-cart {
+    border-color: var(--spd-primary);
+    background: var(--spd-primary);
+    color: #fff;
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--spd-primary) 22%, transparent);
+}
+
+.spd-btn-cart:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--spd-primary) 88%, #000);
 }
 
 .spd-btn-buy {
@@ -2231,75 +2248,213 @@ width: 100%;
     object-fit: contain;
 }
 
+.spd-availability-note {
+    --note-accent: var(--spd-primary);
+    display: flex;
+    align-items: baseline;
+    gap: .65rem;
+    margin: .85rem 0;
+    padding: .2rem .8rem;
+    border-inline-start: 3px solid var(--note-accent);
+    color: var(--spd-text);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+.spd-availability-note.is-warning { --note-accent: #bb542f; }
+.spd-availability-note.is-preorder { --note-accent: #996016; }
+.spd-availability-note > i { color: var(--note-accent); }
+.spd-availability-note strong { font-size: 1rem; }
+.spd-availability-note p { margin: .15rem 0 0; color: var(--spd-muted); font-size: .88rem; }
+
+.unit-options { display:grid; flex:1; min-width:0; gap:.5rem; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.unit-options .spd-unit-btn { display:flex; align-items:center; gap:8px; min-height:44px; padding:6px 12px; border-radius:8px; font-size:15px; text-align:start; }
+.unit-options .spd-unit-btn span { min-width:0; overflow-wrap:anywhere; }
+.unit-check { margin-inline-start:auto; padding:4px; border-radius:50%; background:var(--spd-primary); color:white; font-size:10px; }
+
+.spd-unit-summary { display: none; }
+
+@media (min-width: 641px) {
+    :global(.p-dialog.spd-quick-order) {
+        max-height: 90dvh; margin: 0; overflow: hidden; border: 0; border-radius: 20px;
+        background: var(--market-card-bg, white); box-shadow: 0 22px 80px #15251c40;
+    }
+    :global(.spd-quick-order > .p-dialog-content) {
+        display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+        padding: 0; border-radius: inherit;
+    }
+    .spd-root { display: flex; flex-direction: column; min-height: 0; max-height: 90dvh; }
+    .spd-root .spd-layout {
+        flex: 1 1 auto; min-height: 0; align-items: start;
+        grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+        gap: clamp(18px, 2.2vw, 32px); padding: clamp(16px, 2vw, 28px);
+        overflow-y: auto; overscroll-behavior: contain;
+        background: var(--spd-card);
+    }
+    .spd-img-col, .spd-info-col { padding: 0; border: 0; background: transparent; min-width: 0; }
+    .spd-info-col { height: auto; max-height: none; overflow: visible; }
+    .spd-name { font-size: clamp(1.18rem, 1.8vw, 1.7rem); line-height: 1.4; overflow-wrap: anywhere; }
+    .spd-title-row { gap: 8px; }
+    .spd-top-actions { gap: 4px; }
+    .spd-price-box { padding: 14px; margin: 8px 0; border: 0; border-radius: 12px; }
+    .spd-price { font-size: clamp(1.85rem, 2.6vw, 2.5rem); }
+    .spd-row-label { width: auto; min-width: 4rem; }
+    .spd-unit-summary { display: grid; gap: .45rem; font-size: .94rem; color: var(--spd-muted); }
+    .spd-unit-summary-line:has(i) {
+        padding: .7rem .9rem; border-radius: .7rem; color: var(--spd-primary);
+        background: color-mix(in srgb, var(--spd-primary) 9%, white);
+    }
+    .spd-availability-note { margin: 1rem 0; padding: .65rem .85rem; }
+    .spd-availability-note.is-warning { background: #fcf5ef; }
+    .spd-left-desc-box { padding: .65rem 0 0; border: 0; border-radius: 0; max-height: none; overflow-wrap: anywhere; }
+    .spd-desc-text :deep(img) { max-width: 100%; height: auto; }
+    .spd-order-footer {
+        display: flex; flex: none; align-items: center; gap: clamp(12px, 2vw, 26px);
+        padding: 14px clamp(16px, 2vw, 28px); border-top: 1px solid var(--spd-border); background: var(--spd-card);
+    }
+    .spd-order-footer .spd-detail-page-btn {
+        margin: 0 auto 0 0; width: auto; min-height: 44px; padding: 4px 0;
+        justify-content: flex-start; color: var(--spd-primary); border: 0; background: transparent;
+    }
+    .spd-order-footer .spd-qty-row { display: flex; align-items: center; gap: 10px; padding: 0; margin: 0; }
+    .spd-order-footer .spd-actions { position: static; margin: 0; padding: 0; flex: 0 1 260px; background: none; }
+    .spd-order-footer .spd-actions button { min-height: 46px; height: auto; padding: 8px 12px; line-height: 1.4; white-space: normal; box-shadow: none; }
+    .spd-order-footer .spd-btn-cart:disabled { background: #e5e8e6; border-color: #e5e8e6; color: #58655d; opacity: 1; box-shadow: none; }
+}
+
 @media (max-width: 640px) {
-    :deep(.product-detail-dialog .p-dialog) {
-        width: 100vw !important;
+    :global(.p-dialog.spd-quick-order) {
+        width: 100% !important;
+        max-width: 100% !important;
+        height: 100vh;
         height: 100dvh;
-        max-height: 100dvh;
+        max-height: 100dvh !important;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        overflow: hidden;
+    }
+
+    :global(.spd-quick-order > .p-dialog-content) {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        overflow: hidden;
+        background: white;
         border-radius: 0;
     }
 
-    .spd-layout {
-        grid-template-columns: 1fr;
+    .mobile-photo-close {
+        position: absolute; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left));
+        z-index: 12; width: 44px; height: 44px; border: 0; border-radius: 50%;
+        color: var(--market-text); background: var(--market-card-bg); box-shadow: 0 2px 8px var(--market-shadow);
     }
+    .spd-root { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--spd-card); }
+    .spd-root .spd-layout {
+        flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;
+        align-items: stretch; gap: 0; overflow-y: auto; overscroll-behavior: contain;
+        padding: 0 0 18px; background: var(--spd-card);
+    }
+    .spd-img-col { display: contents; }
+    .spd-main-img-wrap { --rail: clamp(56px,18vw,82px); position:relative; display:flex; flex-direction:row; align-items:stretch; flex:none; width:100%; border:0; border-radius:14px 14px 0 0; background:linear-gradient(135deg,var(--market-header-bg),var(--market-page-bg)); }
+    .mobile-photo-track { display:flex; flex:1; min-width:0; overflow-x:auto; scroll-snap-type:x mandatory; overscroll-behavior-x:contain; scrollbar-width:none; }
+    .mobile-photo-track::-webkit-scrollbar { display:none; }
+    .mobile-photo-track .spd-main-img { flex:0 0 100%; width:100%; min-width:0; height:clamp(200px,70vw,36dvh); object-fit:contain; padding:10px 2px; box-sizing:border-box; scroll-snap-align:start; background:transparent; mix-blend-mode:multiply; }
+    .mobile-thumb-rail { position:relative; align-self:center; display:grid; align-content:start; gap:5px; width:var(--rail); margin:8px; max-height:clamp(174px,61vw,31dvh); overflow:auto; overscroll-behavior:contain; }
+    .mobile-thumb-rail button { width:100%; aspect-ratio:1; padding:2px; border-radius:9px; border:2px solid transparent; background:var(--spd-card); }
+    .mobile-thumb-rail button[aria-pressed="true"] { border-color:var(--spd-primary); }
+    .mobile-thumb-rail img { width:100%; height:100%; display:block; object-fit:contain; }
+    .mobile-photo-count { position:absolute; bottom:5px; left:9px; padding:1px 7px; border-radius:999px; background:rgb(0 0 0 / 57%); color:white; pointer-events:none; font-size:11px; }
+    .spd-main-img-wrap:has(.mobile-thumb-rail) .spd-return-badge { right:calc(var(--rail) + 18px); }
+    .spd-soldout-overlay, .spd-preorder-overlay, .spd-return-badge { pointer-events:none; }
+    .spd-info-col { position:relative; margin-top:0; border-radius:0; background:var(--spd-card); display:flex; flex-direction:column; flex:none; padding:22px max(16px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left)); height:auto; max-height:none; overflow:visible; }
+    .spd-top-actions .spd-close-btn, .spd-incart-bar { display: none; }
+    .spd-top-actions { gap: 3px; }
+    .spd-top-actions > button { width: 40px; height: 40px; }
+    .spd-name { font-size: clamp(17px,4.5vw,21px); line-height:1.32; overflow-wrap: anywhere; }
+    .spd-price-box { background: none; border: 0; padding: 6px 0; margin: 0; }
+    .spd-price { font-size: clamp(28px,7vw,34px); font-weight:750; }
+    .spd-stats-row { padding: 8px 0 2px; }
+    .spd-stat-item { border: 0; padding: 0; }
+    .spd-stat-divider { display: inline; color: #b8c5bc; }
+    .spd-row { display: block; }
+    .spd-row-label { width: auto; margin-bottom: 6px; }
+    .spd-code, .spd-row-label, .spd-stat-item { font-size:14px; }
+    .spd-availability-line { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; border-bottom:1px solid var(--spd-border); padding:8px 0; }
+    .spd-availability-note { flex:1 1 150px; border:0; margin:0; padding:0; }
+    .mobile-more { margin-inline-start:auto; min-height:44px; background:transparent; border:0; color:var(--spd-primary); font-weight:650; text-decoration:underline; cursor:pointer; }
+    .mobile-more i { vertical-align:middle; }
 
-    .spd-img-col {
-        padding: 8px;
-        border-right: 0;
-        border-bottom: 1px solid var(--spd-border);
+    .spd-unit-summary { display: grid; gap: 3px; color: var(--spd-muted); font-size: .86rem; line-height: 1.55; }
+    .spd-unit-summary-line { margin: 0; overflow-wrap: anywhere; color: #c2410c; font-size: 1rem;}
+    .spd-left-desc-box { margin-inline:16px; order: 1; flex: none; display: block; padding: 14px 0 0; max-height: none; overflow: visible; border: 0; border-top: 1px solid #e7ece8; border-radius: 0; }
+    .spd-desc-text { overflow-wrap: anywhere; }
+    .spd-desc-text :deep(img) { max-width: 100%; height: auto; }
+    .spd-mobile-footer {
+        flex: none; display: flex; align-items: center; gap: 10px;
+        padding: 9px max(12px, env(safe-area-inset-right)) calc(9px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+        border-top: 1px solid var(--spd-border); background: var(--spd-card); box-shadow: 0 -3px 14px rgb(26 53 36 / 6%);
     }
-
-    .spd-left-desc-box {
-        display: none;
+    .spd-mobile-footer .spd-qty-row { flex: none; display: block; margin: 0; padding: 0; }
+    .spd-mobile-footer .spd-qty-row > :not(.spd-qty-wrap) { display: none; }
+    .spd-mobile-footer .spd-qty-wrap { width:auto; min-width:0; height:46px; border:0; border-radius:999px; background:var(--market-surface-soft); }
+    .spd-mobile-footer .spd-qty-btn, .spd-mobile-footer .spd-qty-input { width: 44px; min-width: 0; height: 44px; flex: 0 0 44px; }
+    .spd-mobile-footer .spd-qty-btn { border:1px solid var(--spd-border); border-radius:50%; background:var(--spd-card); }
+    .spd-mobile-footer .spd-qty-input { border:0; background:transparent; font-weight:700; }
+    .spd-mobile-footer .spd-actions { position: static; flex: 1; min-width: 0; padding: 0; margin: 0; background: none; }
+    .spd-mobile-footer .spd-actions button { height:auto; min-height:48px; padding:8px; border-radius:12px; font-size:17px; line-height:1.3; white-space: normal; box-shadow: none; }
+}
+@media (min-width: 641px) {
+    .spd-main-img-wrap {
+        --spd-thumb-slot: clamp(54px, 5.5vw, 78px);
+        border: 1px solid #eee7da;
+        border-radius: 14px;
+        background: #faf6ee;
     }
-
-    .spd-close-btn {
-        top: 10px;
-        left: 10px;
+    .spd-main-img-wrap :deep(.spd-galleria) { border: 0; border-radius: inherit; }
+    .spd-main-img-wrap :deep(.p-galleria-items-container) { flex: 1; min-width: 0; }
+    .spd-main-img-wrap :deep(.p-galleria-items) { width: 100%; min-width: 0; }
+    .spd-main-img-wrap :deep(.p-galleria-item) { flex: 1; min-width: 0; }
+    .spd-main-img-wrap .spd-main-img {
+        height: clamp(245px, 44vh, 425px);
+        padding: clamp(8px, 1vw, 16px);
+        object-fit: contain;
     }
-
-    .spd-main-img {
-        height: 250px;
+    .spd-main-img-wrap :deep(.p-galleria-thumbnails) {
+        width: calc(var(--spd-thumb-slot) + 12px);
+        border-inline-end: 1px solid #eee7da;
     }
-
-    .spd-info-col {
-        padding: 16px 16px 88px;
-        height: auto;
-        max-height: none;
-        overflow: visible;
+    .spd-main-img-wrap :deep(.p-galleria-thumbnails-content) {
+        background: #fffcf7;
+        padding: 6px;
+        justify-content: center;
     }
-
-    .spd-title-row {
-        gap: 10px;
+    .spd-main-img-wrap :deep(.p-galleria-thumbnail-items) { gap: 0; }
+    .spd-main-img-wrap :deep(.p-galleria-thumbnail-item) {
+        border: 0 !important;
+        opacity: 1;
+        box-shadow: none;
     }
-
-    .spd-name {
-        font-size: 1.08rem;
+    .spd-main-img-wrap .spd-thumb-wrap {
+        width: calc(var(--spd-thumb-slot) - 6px);
+        height: calc(var(--spd-thumb-slot) - 6px);
+        border: 1px solid #deded5;
+        border-radius: 8px;
+        background: white;
+        padding: 3px;
     }
-
-    .spd-row {
-        display: block;
+    .spd-main-img-wrap :deep(.p-galleria-thumbnail-item-current .spd-thumb-wrap) {
+        outline: 2px solid var(--spd-primary);
+        outline-offset: -2px;
     }
-
-    .spd-row-label {
-        width: auto;
-        margin-bottom: 8px;
+    .spd-main-img-wrap :deep(.p-galleria-nav-button) {
+        border-radius: 50%;
+        color: #365341;
+        background: rgb(255 255 255 / 90%);
+        box-shadow: 0 1px 4px rgb(45 50 39 / 12%);
     }
-
-    .spd-preorder-preview {
-        grid-template-columns: 1fr;
-    }
-
-    .spd-actions {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        margin: 0;
-        padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
-        border-top: 1px solid var(--spd-border);
-        background: #fff;
-        box-shadow: 0 -10px 28px rgba(15, 23, 42, 0.1);
-    }
+    .spd-soldout-overlay, .spd-preorder-overlay, .spd-return-badge { pointer-events: none; }
 }
 </style>

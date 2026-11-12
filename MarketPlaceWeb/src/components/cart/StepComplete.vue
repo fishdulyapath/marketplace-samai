@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import lineQrImage from '@/assets/line.png';
 import { useLanguageStore } from '@/stores/languageStore';
 
@@ -37,436 +37,122 @@ const props = defineProps({
 const emit = defineEmits(['go-to-shop', 'review-cart']);
 const languageStore = useLanguageStore();
 const t = languageStore.t;
-const lineContactUrl = ref(import.meta.env.VITE_APP_LINE_URL || '#');
-const salePhoneNumber = ref(import.meta.env.VITE_APP_PHONE || '');
+const lineContactUrl = import.meta.env.VITE_APP_LINE_URL;
+const salePhoneNumber = import.meta.env.VITE_APP_PHONE;
 
-// เลขที่เอกสารมาจาก server เท่านั้น — ห้ามสุ่มเลขปลอมให้ลูกค้าเห็น เพราะค้นในระบบไม่เจอ (REQ4)
-const displayOrderNumber = ref(props.orderNumber || '');
-
-// Use provided date and time or generate current ones
-const displayOrderDate = ref(
-    props.orderDate ||
-        new Date().toLocaleDateString('th-TH', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        })
-);
-
-const displayOrderTime = ref(
-    props.orderTime ||
-        new Date().toLocaleTimeString('th-TH', {
-            hour: '2-digit',
-            minute: '2-digit'
-        })
-);
-const displayOrderNumbers = computed(() => {
-    const numbers = Array.isArray(props.orderNumbers) ? props.orderNumbers.filter(Boolean) : [];
-    return numbers.length > 0 ? numbers : [displayOrderNumber.value].filter(Boolean);
-});
-const isPartial = computed(() => props.partial);
-const completionTitle = computed(() => (isPartial.value ? t('orderComplete.partialTitle') : 'ส่งคำขอแล้ว รอพนักงานจัดคลัง'));
-const completionSubtitle = computed(() => (isPartial.value ? t('orderComplete.partialHint') : 'ติดตามสถานะและยกเลิกคำขอที่ยังรอดำเนินการได้ที่ประวัติคำสั่งซื้อ'));
-const completionStatusTitle = computed(() => (isPartial.value ? t('orderComplete.partialTitle') : 'รอพนักงานยืนยัน'));
-const completionStatusHint = computed(() => (isPartial.value ? t('orderComplete.partialHint') : 'พนักงานจะเลือกคลังและที่เก็บ ก่อนยืนยันคำสั่งซื้อให้คุณ'));
-const referenceOrderText = computed(() => displayOrderNumbers.value.join(', ') || displayOrderNumber.value);
-const showDocumentList = computed(() => isPartial.value || props.preorder || displayOrderNumbers.value.length > 1);
-function getDocumentLabel(type) {
-    if (type === 'ready') return t('orderComplete.readyDocument');
-    if (type === 'preorder') return t('orderComplete.preorderDocument');
-    return t('orderComplete.savedDocument');
-}
 const documentRows = computed(() => {
-    const explicitRows = Array.isArray(props.orderDocuments) ? props.orderDocuments.filter((item) => item?.docNo) : [];
-    if (explicitRows.length > 0) {
-        return explicitRows.map((item) => ({
-            docNo: item.docNo,
-            label: getDocumentLabel(item.type),
-        }));
-    }
-
-    const hasMultipleDocs = displayOrderNumbers.value.length > 1;
-    return displayOrderNumbers.value.map((docNo, index) => {
-        let label = t('orderComplete.savedDocument');
-        if (props.preorder && hasMultipleDocs) {
-            label = index === 0 ? t('orderComplete.readyDocument') : t('orderComplete.preorderDocument');
-        } else if (props.preorder) {
-            label = t('orderComplete.preorderDocument');
-        }
-        return { docNo, label };
+    const types = new Map((props.orderDocuments || []).filter(row => row?.docNo).map(row => [row.docNo.trim(), row.type]));
+    const saved = (props.orderNumbers || []).filter(Boolean).map(value => value.trim()).filter(Boolean);
+    const numbers = [...new Set([...saved, ...types.keys()])];
+    if (!numbers.length && props.orderNumber) numbers.push(props.orderNumber);
+    return numbers.map((docNo, index) => {
+        const type = types.get(docNo) || (props.preorder ? (numbers.length > 1 && index === 0 ? 'ready' : 'preorder') : '');
+        const label = type === 'ready' ? 'orderComplete.readyDocument' : type === 'preorder' ? 'orderComplete.preorderDocument' : 'orderComplete.savedDocument';
+        return { docNo, label, type };
     });
 });
 </script>
 
 <template>
-    <div class="complete-shell">
-        <section class="complete-hero">
-            <div class="complete-hero-copy">
-                <p class="complete-eyebrow">{{ t('orderComplete.eyebrow') }}</p>
-                <h2 class="complete-title">{{ completionTitle }}</h2>
-                <p class="complete-subtitle">{{ completionSubtitle }}</p>
-            </div>
-
-            <div :class="['complete-celebration-card', { 'complete-celebration-card--partial': isPartial }]">
-                <div :class="['success-badge', { 'success-badge--partial': isPartial }]">
-                    <i :class="[isPartial ? 'pi pi-exclamation-triangle' : 'pi pi-check-circle', 'text-4xl']"></i>
+    <section class="receipt" :class="{ partial }" aria-labelledby="receipt-title">
+        <div class="receipt-main">
+            <header class="receipt-status">
+                <span class="status-icon" aria-hidden="true"><i :class="partial ? 'pi pi-exclamation-triangle' : 'pi pi-check'"></i></span>
+                <div>
+                    <h1 id="receipt-title">{{ t(partial ? 'orderComplete.partialTitle' : 'orderComplete.pendingTitle') }}</h1>
+                    <p>{{ t(partial ? 'orderComplete.partialHint' : 'orderComplete.pendingHint') }}</p>
                 </div>
-                <strong>{{ completionStatusTitle }}</strong>
-                <span>{{ completionStatusHint }}</span>
-            </div>
-        </section>
+            </header>
 
-        <section class="complete-grid">
-            <div class="complete-card complete-order-card">
-                <div class="complete-order-header">
-                    <h3>{{ t('orderComplete.orderInfo') }}</h3>
-                    <p>{{ t('orderComplete.keepReference') }}</p>
-                </div>
-
-                <div class="complete-order-details">
-                    <div class="complete-detail-row">
-                        <span class="complete-muted">{{ t('orderComplete.orderNo') }}</span>
-                        <strong>{{ referenceOrderText }}</strong>
-                    </div>
-                    <div class="complete-detail-row">
-                        <span class="complete-muted">{{ t('orderComplete.orderDateTime') }}</span>
-                        <strong>{{ displayOrderDate }} {{ displayOrderTime }} {{ t('orderComplete.timeSuffix') }}</strong>
-                    </div>
-                </div>
-
-                <div v-if="showDocumentList" class="complete-doc-list">
-                    <span class="complete-muted">{{ t('orderComplete.savedDocuments') }}</span>
-                    <div class="complete-doc-pills">
-                        <div v-for="row in documentRows" :key="row.docNo" class="complete-doc-pill">
-                            <span>{{ row.label }}</span>
-                            <strong>{{ row.docNo }}</strong>
+            <div class="reference">
+                <template v-if="documentRows.length > 1">
+                    <h2>{{ t('orderComplete.savedDocuments') }}</h2>
+                    <dl class="document-list">
+                        <div v-for="row in documentRows" :key="row.docNo">
+                            <dt>{{ t(row.label) }}</dt><dd>{{ row.docNo }}</dd>
                         </div>
-                    </div>
-                </div>
-
-                <div v-if="isPartial" class="complete-partial-alert">
-                    <i class="pi pi-exclamation-triangle"></i>
-                    <span>
-                        <strong>{{ t('orderComplete.partialTitle') }}</strong>
-                        <small>{{ t('orderComplete.partialHint') }}</small>
-                    </span>
-                </div>
-
-                <div class="complete-highlight-strip">
-                    <span>{{ t('orderComplete.referenceReady') }}</span>
-                    <strong>{{ referenceOrderText }}</strong>
+                    </dl>
+                </template>
+                <template v-else-if="documentRows.length">
+                    <h2>{{ t('orderComplete.requestNo') }}<small v-if="preorder"> · {{ t(documentRows[0].label) }}</small></h2>
+                    <strong class="order-number">{{ documentRows[0].docNo }}</strong>
+                </template>
+                <div v-if="orderDate || orderTime" class="order-date">
+                    <i class="pi pi-calendar" aria-hidden="true"></i>
+                    <span>{{ t('orderComplete.orderDateTime') }}</span>
+                    <strong>{{ orderDate }} {{ orderTime }} {{ orderTime ? t('orderComplete.timeSuffix') : '' }}</strong>
                 </div>
             </div>
 
-            <div class="complete-card complete-inner-card">
-                <h3 class="font-bold text-lg mb-3">{{ t('orderComplete.moreInfo') }}</h3>
-                <ul class="space-y-3 text-left list-disc pl-5">
-                    <li>{{ t('orderComplete.checkStatus') }}</li>
-                    <li>{{ t('orderComplete.notifySales', { orderNo: referenceOrderText }) }}</li>
-                    <li>{{ t('orderComplete.contactSales') }} {{ salePhoneNumber || '' }}</li>
-                </ul>
-
-                <div class="complete-line-contact">
-                    <div class="complete-line-copy">
-                        <strong>{{ t('orderComplete.lineTitle') }}</strong>
-                        <span>{{ t('orderComplete.lineHint') }}</span>
-                    </div>
-                    <a v-if="lineContactUrl !== '#'" :href="lineContactUrl" target="_blank" rel="noopener" class="complete-line-link">
-                        <img :src="lineQrImage" alt="LINE Contact" />
-                        <span>เพิ่มเพื่อน LINE</span>
-                    </a>
-                    <div v-else class="complete-line-link">
-                        <img :src="lineQrImage" alt="LINE Contact" />
-                        <span>LINE</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <div class="complete-actions">
-            <Button v-if="isPartial" :label="t('orderComplete.reviewCart')" icon="pi pi-shopping-cart" @click="emit('review-cart')" />
-            <Button :label="t('orderComplete.backToShop')" icon="pi pi-store" :outlined="isPartial" @click="emit('go-to-shop')" />
+            <nav class="receipt-actions">
+                <Button v-if="partial" :label="t('orderComplete.reviewCart')" icon="pi pi-shopping-cart" @click="emit('review-cart')" />
+                <RouterLink to="/orders-history" class="history-link"><i class="pi pi-file" aria-hidden="true"></i>{{ t('nav.myOrders') }}</RouterLink>
+                <Button :label="t('cartPage.continueShopping')" icon="pi pi-shop" :outlined="partial" @click="emit('go-to-shop')" />
+            </nav>
         </div>
-    </div>
+        <aside class="contact">
+            <h2>{{ t('orderComplete.lineTitle') }}</h2>
+            <p>{{ t('orderComplete.lineHint') }}</p>
+            <div class="line-contact">
+                <img :src="lineQrImage" alt="LINE QR" width="96" height="96" />
+                <a v-if="lineContactUrl && lineContactUrl !== '#'" :href="lineContactUrl" target="_blank" rel="noopener" class="line-link">
+                    LINE <i class="pi pi-external-link" aria-hidden="true"></i>
+                </a>
+            </div>
+            <a v-if="salePhoneNumber" class="phone-link" :href="'tel:' + salePhoneNumber.replace(/[^\d+]/g, '')">
+                <i class="pi pi-phone" aria-hidden="true"></i>{{ salePhoneNumber }}
+            </a>
+        </aside>
+    </section>
 </template>
 
 <style scoped>
-.complete-shell {
-    background:
-        radial-gradient(circle at top left, color-mix(in srgb, var(--market-accent, #f97316) 16%, transparent), transparent 24%),
-        linear-gradient(180deg, var(--market-card-bg, #fffefb) 0%, var(--market-surface-soft, #fdf9f1) 100%);
-    border: 1px solid var(--market-card-border, #efe3c8);
-    border-radius: 1.5rem;
-    padding: 1.5rem;
-}
-
-.complete-hero {
+.receipt {
+    --status-color: var(--market-primary, #08794e);
+    --tint: color-mix(in srgb, var(--status-color) 7%, var(--market-card-bg, white));
     display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(16rem, 0.8fr);
-    gap: 1rem;
-    margin-bottom: 1rem;
-}
-
-.complete-eyebrow {
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--market-primary, #b28b46);
-    margin-bottom: 0.5rem;
-}
-
-.complete-celebration-card,
-.complete-card {
-    background: var(--market-card-bg, #fffdf8);
-    border: 1px solid var(--market-card-border, #efe3c8);
-    border-radius: 1.25rem;
-    box-shadow: 0 10px 18px var(--market-shadow, rgba(140, 111, 53, 0.08));
-}
-
-.complete-celebration-card {
-    display: grid;
-    place-items: center;
-    align-content: center;
-    gap: 0.5rem;
-    padding: 1.5rem;
-    text-align: center;
-}
-
-.complete-celebration-card--partial {
-    background: color-mix(in srgb, #f59e0b 10%, var(--market-card-bg, #fffdf8));
-    border-color: color-mix(in srgb, #f59e0b 42%, var(--market-card-border, #efe3c8));
-}
-
-.success-badge {
-    background: var(--market-primary-soft, #f9f2e1);
-    color: var(--market-primary, #9a7a38);
-    border: 1px solid var(--market-card-border, #ebddbf);
-    width: 5rem;
-    height: 5rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 9999px;
-}
-
-.success-badge--partial {
-    background: color-mix(in srgb, #f59e0b 18%, #fff);
-    border-color: color-mix(in srgb, #f59e0b 52%, var(--market-card-border, #ebddbf));
-    color: #92400e;
-}
-
-.complete-title {
-    color: var(--market-text, #5b4a27);
-    margin: 0;
-}
-
-.complete-subtitle {
-    color: var(--market-muted, #9b8a67);
-    margin-top: 0.5rem;
-}
-
-.complete-card {
-    padding: 1.25rem;
-}
-
-.complete-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-    gap: 1rem;
-}
-
-.complete-order-header h3 {
-    margin: 0;
-    color: var(--market-text, #5b4a27);
-}
-
-.complete-order-header p {
-    margin: 0.3rem 0 0;
-    color: var(--market-muted, #9b8a67);
-}
-
-.complete-order-details {
-    display: grid;
-    gap: 0.8rem;
-    margin: 1rem 0;
-}
-
-.complete-detail-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: center;
-}
-
-.complete-highlight-strip {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: center;
-    padding: 0.9rem 1rem;
+    grid-template-columns: minmax(0, 1.65fr) minmax(13rem, 1fr);
+    gap: clamp(1.3rem, 3vw, 3rem);
+    max-width: 68rem;
+    margin: clamp(.5rem, 2vw, 1.6rem) auto;
+    padding: clamp(1rem, 3vw, 2rem);
+    border: 1px solid var(--market-card-border);
+    border-top: .35rem solid var(--status-color);
     border-radius: 1rem;
-    background: var(--market-primary-soft, #f8efd9);
-    color: var(--market-primary, #6a5428);
-}
-
-.complete-doc-list {
-    display: grid;
-    gap: 0.55rem;
-    margin: 0 0 1rem;
-}
-
-.complete-doc-pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-
-.complete-doc-pill {
-    display: inline-grid;
-    gap: 0.1rem;
-    min-width: 0;
-    max-width: 100%;
+    background: var(--market-card-bg, white);
+    color: var(--market-text);
+    box-shadow: 0 6px 24px rgb(31 54 43 / 6%);
     overflow-wrap: anywhere;
-    border: 1px solid var(--market-card-border, #ebddbf);
-    border-radius: 999px;
-    background: var(--market-card-bg, #fffdf8);
-    color: var(--market-text, #5b4a27);
-    padding: 0.35rem 0.75rem;
-    font-size: 0.86rem;
 }
-
-.complete-doc-pill span {
-    color: var(--market-muted, #9b8a67);
-    font-size: 0.72rem;
-    font-weight: 800;
-}
-
-.complete-partial-alert {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.65rem;
-    margin: 0 0 1rem;
-    padding: 0.85rem;
-    border: 1px solid color-mix(in srgb, #f59e0b 45%, var(--market-card-border, #ebddbf));
-    border-radius: 0.9rem;
-    background: color-mix(in srgb, #f59e0b 11%, var(--market-card-bg, #fffdf8));
-    color: #92400e;
-}
-
-.complete-partial-alert i {
-    margin-top: 0.15rem;
-}
-
-.complete-partial-alert span {
-    display: grid;
-    gap: 0.2rem;
-}
-
-.complete-partial-alert small {
-    line-height: 1.45;
-}
-
-.complete-inner-card {
-    background: var(--market-surface-soft, #fdf7ea);
-    border: 1px solid var(--market-card-border, #ebddbf);
-}
-
-.complete-line-contact {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 1rem;
-    margin-top: 1rem;
-    padding: 1rem;
-    border: 1px solid color-mix(in srgb, #06c755 22%, var(--market-card-border, #ebddbf));
-    border-radius: 1rem;
-    background: color-mix(in srgb, #06c755 8%, var(--market-card-bg, #fffdf8));
-}
-
-.complete-line-copy {
-    display: grid;
-    gap: 0.25rem;
-}
-
-.complete-line-copy strong {
-    color: var(--market-text, #5b4a27);
-}
-
-.complete-line-copy span {
-    color: var(--market-muted, #9b8a67);
-    font-size: 0.9rem;
-    line-height: 1.45;
-}
-
-.complete-line-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.65rem;
-    min-width: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: #049642;
-    font-weight: 800;
-    text-decoration: none;
-}
-
-.complete-line-link img {
-    width: 5.25rem;
-    height: 5.25rem;
-    object-fit: contain;
-    border-radius: 0.35rem;
-}
-
-.complete-muted {
-    color: var(--market-muted, #9b8a67);
-}
-
-.complete-actions {
-    margin-top: 1.25rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    justify-content: center;
-}
-
-:deep(.complete-shell .p-button:not(.p-button-text):not(.p-button-outlined)) {
-    background: linear-gradient(120deg, var(--market-primary, #e6c885) 0%, color-mix(in srgb, var(--market-primary, #d3af67) 74%, var(--market-accent, #f97316)) 100%);
-    border-color: var(--market-primary, #d3af67);
-    color: var(--market-card-bg, #5b4a27);
-}
-
-:deep(.complete-shell .p-button:not(.p-button-text):not(.p-button-outlined):hover) {
-    background: linear-gradient(120deg, color-mix(in srgb, var(--market-primary, #ddbf79) 90%, #fff) 0%, var(--market-primary, #c8a45d) 100%);
-    border-color: var(--market-primary, #c8a45d);
-}
-
-@media (max-width: 900px) {
-    .complete-hero,
-    .complete-grid {
-        grid-template-columns: 1fr;
-    }
-}
-
-@media (max-width: 640px) {
-    .complete-shell {
-        padding: 1rem;
-    }
-
-    .complete-detail-row,
-    .complete-highlight-strip {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .complete-line-contact {
-        grid-template-columns: 1fr;
-    }
-
-    .complete-line-link {
-        justify-content: flex-start;
-    }
+.receipt.partial { --status-color: #986014; }
+.receipt-main { min-width: 0; }
+.receipt-status { display: flex; gap: .9rem; align-items: flex-start; }
+.status-icon { display: grid; place-items: center; flex: none; width: 3.15rem; height: 3.15rem; border-radius: 50%; background: var(--tint); color: var(--status-color); }
+.status-icon i { font-size: 1.5rem; }
+.receipt h1 { margin: 0; font-size: clamp(1.5rem, 2.6vw, 2.1rem); font-weight: 750; line-height: 1.25; }
+.receipt p { margin: .35rem 0 0; color: var(--market-muted); line-height: 1.5; }
+.reference { margin-block: 1.15rem; padding: 1rem; background: var(--tint); border-radius: .75rem; }
+.reference h2 { margin: 0; font-size: .95rem; font-weight: 600; }
+.order-number { display: block; margin-top: .25rem; font-size: clamp(1.25rem, 2.4vw, 1.85rem); color: var(--status-color); line-height: 1.3; }
+.order-date { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .5rem; margin-top: .8rem; font-size: .88rem; }
+.order-date span, .document-list dt { color: var(--market-muted); }
+.document-list { margin: .4rem 0 0; }
+.document-list > div { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .2rem .6rem; padding-block: .55rem; border-bottom: 1px solid var(--market-card-border); }
+.document-list dd { margin: 0; font-weight: 700; }
+.receipt-actions { display: flex; gap: .6rem; flex-wrap: wrap; padding-top: 1rem; border-top: 1px dashed var(--market-card-border); }
+.history-link, .receipt-actions :deep(.p-button) { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 2.85rem; }
+.history-link { padding: .45rem .9rem; border-radius: .5rem; border: 1px solid var(--market-primary); color: var(--market-primary); font-weight: 650; }
+.contact { align-self: start; border-inline-start: 1px solid var(--market-card-border); padding-inline-start: clamp(1rem, 2.5vw, 2rem); }
+.contact h2 { margin: 0; font-size: 1.1rem; font-weight: 700; }
+.line-contact { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; margin-top: .9rem; }
+.line-contact img { width: 6rem; height: 6rem; object-fit: contain; }
+.line-link, .phone-link { display: inline-flex; align-items: center; gap: .55rem; min-height: 2.75rem; font-weight: 650; }
+.line-link { padding: .4rem .85rem; border-radius: .55rem; color: #116e44; background: #e9f7ef; }
+.phone-link { margin-top: .4rem; color: var(--market-text); text-decoration: underline; text-underline-offset: .15em; }
+@media (max-width: 720px) {
+    .receipt { grid-template-columns: 1fr; gap: 1rem; margin: 0 auto; }
+    .contact { border-inline-start: 0; border-top: 1px solid var(--market-card-border); padding: 1rem 0 0; }
+    .receipt-actions { display: grid; }
+    .line-contact img { width: 5rem; height: 5rem; }
 }
 </style>

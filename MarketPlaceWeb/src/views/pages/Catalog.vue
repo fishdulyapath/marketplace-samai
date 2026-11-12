@@ -23,7 +23,7 @@ const router = useRouter();
 const auth = useAuthenStore();
 let catalogScroll = null;
 onBeforeRouteLeave(to => {
-    if (to.name === 'cart') catalogScroll = { y: window.scrollY, customer: auth.userCode };
+    if (['cart', 'basket'].includes(to.name)) catalogScroll = { y: window.scrollY, customer: auth.userCode };
 });
 onActivated(async () => {
     if (catalogScroll === null) return;

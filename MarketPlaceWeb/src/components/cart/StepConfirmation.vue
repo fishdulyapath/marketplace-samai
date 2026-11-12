@@ -1,5 +1,6 @@
 <!-- eslint-disable no-unused-vars -->
 <script setup>
+import { useCheckoutFooter } from '@/composables/useCheckoutFooter';
 import CartService from '@/services/CartService';
 import DeliveryAddressForm from './DeliveryAddressForm.vue';
 import { useDeliveryAddress } from '@/composables/useDeliveryAddress';
@@ -387,6 +388,11 @@ const priceStatusMeta = computed(() => {
         };
     }
 
+    const pendingCheck = readinessChecks.value.find(check => !check.ready);
+    if (pendingCheck && allConfirmedItems.value.length) {
+        return { tone: 'warn', icon: 'pi pi-exclamation-circle', title: t('reviewOrder.waitingReview'), detail: pendingCheck.detail };
+    }
+
     if (allConfirmedItems.value.length > 0) {
         return {
             tone: 'ready',
@@ -516,8 +522,11 @@ const readinessChecks = computed(() => [
     },
     {
         label: t('reviewOrder.pickupInfo'),
-        ready: formData.value.deliveryMethod !== 'delivery' || (!!formData.value.deliveryAddress && !!formData.value.deliveryTelephone),
-        detail: ['requireDeliveryAddress', 'requireDeliveryPhone'].includes(checkoutFormIssue.value) ? checkoutFormBlockMessage.value : deliveryMethodLabel.value
+        ready: formData.value.deliveryMethod === 'delivery'
+            ? !!formData.value.deliveryAddress && !!formData.value.deliveryTelephone
+            : !PICKUP_ISSUE_KEYS.includes(checkoutFormIssue.value),
+        detail: ['requireDeliveryAddress', 'requireDeliveryPhone'].includes(checkoutFormIssue.value) || PICKUP_ISSUE_KEYS.includes(checkoutFormIssue.value)
+            ? checkoutFormBlockMessage.value : deliveryMethodLabel.value
     }
 ]);
 const submitButtonLabel = computed(() => {
@@ -1543,28 +1552,16 @@ function toggleSetItems(itemCode) {
 function isExpanded(itemCode) {
     return expandedItems.value.has(itemCode);
 }
+const checkoutFooter = ref(null);
+useCheckoutFooter(checkoutFooter);
 </script>
 
 <template>
     <div class="confirmation-shell">
-        <div class="confirmation-heading mb-4">
-            <div>
-                <p class="confirmation-kicker">{{ t('reviewOrder.kicker') }}</p>
-                <h2 class="confirmation-title">{{ t('reviewOrder.title') }}</h2>
-            </div>
-            <div class="confirmation-head-metrics">
-                <div class="confirmation-state-chip">
-                    <span>{{ t('reviewOrder.productLines') }}</span>
-                    <strong>{{ t('reviewOrder.itemCount', { count: finalSummary.total_items }) }}</strong>
-                    <small>{{ t('reviewOrder.pieceCount', { count: finalSummary.total_qty }) }}</small>
-                </div>
-                <div class="confirmation-state-chip">
-                    <span>{{ t('reviewOrder.total') }}</span>
-                    <strong v-if="pricesReady">฿{{ formatNumber(taxSummary.totalAmount) }}</strong>
-                    <strong v-else class="confirmation-loading-total">{{ t('reviewOrder.calculating') }}</strong>
-                </div>
-            </div>
-        </div>
+        <header class="confirmation-heading">
+            <h1 class="confirmation-title">{{ t('reviewOrder.title') }}</h1>
+            <span>{{ t('reviewOrder.summaryLine', { items: finalSummary.total_items, qty: finalSummary.total_qty }) }}</span>
+        </header>
 
         <div :class="['confirmation-price-status', `confirmation-price-status--${priceStatusMeta.tone}`]">
             <div class="confirmation-price-status-icon">
@@ -1871,46 +1868,6 @@ function isExpanded(itemCode) {
                             </div>
                         </div>
 
-                        <!-- Employee code เปลี่ยนเป็นแบบ Select -->
-                        <div class="mb-4">
-                            <label for="employee-code" class="block font-medium mb-2">{{ t('reviewOrder.employeeOptional') }}</label>
-                            <div v-if="isSearchingEmployee && employeeOptions.length === 0" class="flex justify-center py-2">
-                                <ProgressSpinner style="width: 30px; height: 30px" strokeWidth="4" />
-                            </div>
-                            <Select
-                                v-model="selectedEmployee"
-                                :options="employeeOptions"
-                                optionLabel="name"
-                                :placeholder="t('reviewOrder.selectEmployee')"
-                                class="w-full"
-                                :loading="isSearchingEmployee"
-                                filter
-                                :aria-label="t('reviewOrder.employeeOptional')"
-                                @filter="filterEmployees"
-                                :filterPlaceholder="t('reviewOrder.employeeSearchPlaceholder')"
-                                :virtualScrollerOptions="{ itemSize: 48, lazy: true, delay: 250 }"
-                                :showClear="true"
-                                @change="onEmployeeSelect($event.value)"
-                            >
-                                <template #value="slotProps">
-                                    <div v-if="slotProps.value" class="flex items-center">
-                                        <i class="pi pi-user mr-2 text-primary"></i>
-                                        <div>{{ slotProps.value.name || '' }}</div>
-                                    </div>
-                                    <span v-else>
-                                        {{ slotProps.placeholder }}
-                                    </span>
-                                </template>
-                                <template #option="slotProps">
-                                    <div class="flex align-items-center w-full" v-if="slotProps && slotProps.option">
-                                        <div>{{ slotProps.option.name || '' }}</div>
-                                    </div>
-                                </template>
-                            </Select>
-                            <small class="text-color-secondary">{{ t('reviewOrder.searchHint') }}</small>
-                        </div>
-
-
                         <!-- ข้อมูลการเข้ารับสินค้า (รีวิว 260908 สไลด์ 6) -->
                         <div v-if="formData.deliveryMethod === 'pickup'" class="mb-4">
                             <label class="block font-medium mb-2">{{ t('reviewOrder.pickupDetails') }}</label>
@@ -1958,6 +1915,43 @@ function isExpanded(itemCode) {
 
                             <!-- บอกช่องที่ยังไม่ได้กรอกตรงนี้ ไม่ใช่ล่างสุดของหน้า -->
                             <Message v-if="pickupBlockMessage" severity="warn" :closable="false" class="mt-2">{{ pickupBlockMessage }}</Message>
+                        </div>
+
+                        <!-- ข้อมูลรับสินค้าอยู่ถัดจากวิธีรับ ก่อนตัวเลือกพนักงานเสริม -->
+                        <div class="mb-4">
+                            <label for="employee-code" class="block font-medium mb-2">{{ t('reviewOrder.employeeOptional') }}</label>
+                            <div v-if="isSearchingEmployee && employeeOptions.length === 0" class="flex justify-center py-2">
+                                <ProgressSpinner style="width: 30px; height: 30px" strokeWidth="4" />
+                            </div>
+                            <Select
+                                v-model="selectedEmployee"
+                                :options="employeeOptions"
+                                optionLabel="name"
+                                :placeholder="t('reviewOrder.selectEmployee')"
+                                class="w-full"
+                                :loading="isSearchingEmployee"
+                                filter
+                                :aria-label="t('reviewOrder.employeeOptional')"
+                                @filter="filterEmployees"
+                                :filterPlaceholder="t('reviewOrder.employeeSearchPlaceholder')"
+                                :virtualScrollerOptions="{ itemSize: 48, lazy: true, delay: 250 }"
+                                :showClear="true"
+                                @change="onEmployeeSelect($event.value)"
+                            >
+                                <template #value="slotProps">
+                                    <div v-if="slotProps.value" class="flex items-center">
+                                        <i class="pi pi-user mr-2 text-primary"></i>
+                                        <div>{{ slotProps.value.name || '' }}</div>
+                                    </div>
+                                    <span v-else>{{ slotProps.placeholder }}</span>
+                                </template>
+                                <template #option="slotProps">
+                                    <div class="flex align-items-center w-full" v-if="slotProps && slotProps.option">
+                                        <div>{{ slotProps.option.name || '' }}</div>
+                                    </div>
+                                </template>
+                            </Select>
+                            <small class="text-color-secondary">{{ t('reviewOrder.searchHint') }}</small>
                         </div>
 
                         <DeliveryAddressForm v-if="formData.deliveryMethod === 'delivery'"
@@ -2236,7 +2230,7 @@ function isExpanded(itemCode) {
                     </div>
 
                     <div class="confirmation-review-actions">
-                        <Button :label="t('reviewOrder.back')" icon="pi pi-arrow-left" outlined severity="secondary" class="conf-back-btn" :disabled="isProcessingOrder" @click="emit('prev-step')" />
+                        <Button :label="t('reviewOrder.back')" icon="pi pi-arrow-left" outlined severity="secondary" class="conf-back-btn checkout-secondary" :disabled="isProcessingOrder" @click="emit('prev-step')" />
                         <Button
                             :label="submitButtonLabel"
                             :icon="!canSubmitOrder ? 'pi pi-lock' : 'pi pi-check-circle'"
@@ -2270,9 +2264,9 @@ function isExpanded(itemCode) {
         </Message>
 
         <!-- Action buttons -->
-        <div class="confirmation-actions flex justify-between items-center mt-6">
-            <Button :label="t('reviewOrder.back')" icon="pi pi-arrow-left" text :disabled="isProcessingOrder" @click="emit('prev-step')" class="conf-back-btn" />
-            <div class="confirmation-action-summary">
+        <div ref="checkoutFooter" class="mobile-checkout-footer confirmation-actions flex justify-between items-center mt-6">
+            <Button :label="t('reviewOrder.back')" icon="pi pi-arrow-left" text :disabled="isProcessingOrder" @click="emit('prev-step')" class="conf-back-btn checkout-secondary" />
+            <div class="confirmation-action-summary checkout-total">
                 <span>{{ t('reviewOrder.itemCount', { count: finalSummary.total_items }) }} · {{ t('reviewOrder.pieceCount', { count: finalSummary.total_qty }) }}</span>
                 <strong v-if="pricesReady">฿{{ formatNumber(taxSummary.totalAmount) }}</strong>
                 <strong v-else>{{ t('reviewOrder.calculating') }}</strong>
@@ -2286,7 +2280,7 @@ function isExpanded(itemCode) {
                 @click="handleCheckout"
                 :loading="isProcessingOrder || isLoadingPrices"
                 :disabled="isProcessingOrder || !canSubmitOrder || (userType === 'employee' && !formData.customerCode)"
-                class="conf-submit-btn"
+                class="conf-submit-btn checkout-primary"
             />
         </div>
 
@@ -3163,4 +3157,13 @@ function isExpanded(itemCode) {
         display: flex !important;
     }
 }
+
+@media (max-width:900px) {
+    .confirmation-shell { padding-bottom:calc(var(--checkout-footer-height, 70px) + 1rem); }
+    .confirmation-review-actions, .confirmation-action-summary span, .confirmation-action-summary small { display:none; }
+    .confirmation-actions.mobile-checkout-footer { width:auto; max-width:none; border-radius:0; }
+    .confirmation-actions .p-button { width:auto; }
+}
+
 </style>
+<style scoped src="./mobileCheckoutFooter.css"></style>

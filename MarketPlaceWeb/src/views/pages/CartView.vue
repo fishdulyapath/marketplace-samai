@@ -1,4 +1,5 @@
 <script setup>
+import ProductFullDetailDialog from '@/views/pages/ProductFullDetailDialog.vue';
 import ProductDetailDialog from '@/views/pages/ProductDetailDialog.vue';
 import ProductSetDialog from '@/views/pages/ProductSetDialog.vue';
 import CartService from '@/services/CartService';
@@ -8,7 +9,7 @@ import { useLanguageStore } from '@/stores/languageStore';
 import { isSalePremiumItem } from '@/utils/itemType';
 import { withProductDisplay } from '@/utils/languageDisplay';
 import { useToast } from 'primevue/usetoast';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 // Import step components
@@ -17,6 +18,10 @@ import StepComplete from '@/components/cart/StepComplete.vue';
 import StepConfirmation from '@/components/cart/StepConfirmation.vue';
 
 const activeStep = ref(0);
+watch(activeStep, async () => {
+    await nextTick();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+});
 const toast = useToast();
 const router = useRouter();
 const cartStore = useCartStore();
@@ -53,6 +58,14 @@ const selectedProductCode = ref('');
 const selectedProductIsSet = ref(false);
 const showProductDialog = ref(false);
 
+const fullDetailOpen = ref(false);
+const fullSelection = ref(null);
+function openFullDetail(code, selection = null) {
+    selectedProductCode.value = code;
+    fullSelection.value = selection;
+    showProductDialog.value = false;
+    fullDetailOpen.value = true;
+}
 function openProductFromCart(item) {
     const code = String(item?.item_code || '').trim();
     if (!code) return;
@@ -118,9 +131,8 @@ function getCartUpdateKey(item = {}) {
 
 async function waitForCartUpdateQueues() {
     const pendingUpdates = Array.from(cartUpdateQueues.values());
-    if (pendingUpdates.length > 0) {
-        await Promise.allSettled(pendingUpdates);
-    }
+    const results = await Promise.allSettled(pendingUpdates);
+    return results.every(result => result.status === 'fulfilled');
 }
 
 function applyLocalCartItemSnapshot(item = {}) {
@@ -201,7 +213,10 @@ function getApiErrorMessage(error) {
 }
 
 // Initialize component
-onMounted(() => checkAuthentication());
+onMounted(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    checkAuthentication();
+});
 
 // Save changes before leaving
 onBeforeUnmount(() => saveCartChanges());
@@ -485,7 +500,8 @@ async function updateCartItem(item) {
         .catch(() => {})
         .then(async () => {
             const cartItemData = formatCartItemsForApi([itemSnapshot]);
-            await CartService.updateCartItemQuantity(cartItemData);
+            const response = await CartService.updateCartItemQuantity(cartItemData);
+            if (!response.data?.success) throw new Error(response.data?.message || t('cartPage.addQtyFailed'));
             hasCartChanges.value = false;
             cartStore.syncWithApiData(localCartItems.value);
             await cartStore.fetchCartSummary();
@@ -502,6 +518,7 @@ async function updateCartItem(item) {
 
     try {
         await currentUpdate;
+        return true;
     } catch (error) {
         console.error('Error updating cart item:', error);
         toast.add({
@@ -511,6 +528,7 @@ async function updateCartItem(item) {
             life: 4200
         });
         await fetchCartItems(false);
+        return false;
     }
 }
 
@@ -623,7 +641,7 @@ async function processCheckout(finalOrderData, done) {
                 // Move to complete step
                 activeStep.value = 2;
 
-                toast.add({
+                if (result.partial) toast.add({
                     severity: result.partial ? 'warn' : 'success',
                     summary: result.partial ? t('cartFlow.checkoutPartialSummary') : t('cartFlow.checkoutSuccessSummary'),
                     detail: result.partial ? t('cartFlow.checkoutPartialDetail', { docNos: savedOrderText }) : t('cartFlow.checkoutSuccessDetail'),
@@ -678,7 +696,9 @@ async function processCheckout(finalOrderData, done) {
 }
 
 // Step navigation
-function nextStep() {
+const openingReview = ref(false);
+async function nextStep() {
+    if (activeStep.value !== 0 || openingReview.value) return;
     if (hasPartialSavedDocs.value) {
         toast.add({
             severity: 'warn',
@@ -688,7 +708,12 @@ function nextStep() {
         });
         return;
     }
-    if (activeStep.value < 2) activeStep.value++;
+    openingReview.value = true;
+    try {
+        if (await waitForCartUpdateQueues()) activeStep.value = 1;
+    } finally {
+        openingReview.value = false;
+    }
 }
 
 function prevStep() {
@@ -697,12 +722,12 @@ function prevStep() {
 
 function goToShop() {
     saveCartChanges();
-    router.push('/');
+    router.push({ path: '/marketplace', query: router.currentRoute.value.query });
 }
 
 function resetStepper() {
     activeStep.value = 0;
-    router.push('/');
+    router.push('/marketplace');
 }
 
 async function reviewPartialCart() {
@@ -752,6 +777,7 @@ function redirectToLogin() {
                         :isLoadingStock="isLoadingStock"
                         :checkoutLocked="hasPartialSavedDocs"
                         :checkoutLockMessage="partialCheckoutLockText"
+                        :save-quantity="updateCartItem"
                         @update-item="updateCartItem"
                         @set-cart-changed="hasCartChanges = true"
                         @refresh-cart="refreshCurrentPage"
@@ -799,16 +825,20 @@ function redirectToLogin() {
 
         <!-- หน้าสั่งสินค้าจากบรรทัดในตะกร้า (รีวิว 260908 สไลด์ 5)
              ลูกค้าเปิดเพื่อเปลี่ยนหน่วยที่จะสั่ง — dialog เดียวกับที่ใช้ในหน้ารายการสินค้า -->
+        <ProductFullDetailDialog v-model:visible="fullDetailOpen" :item-code="selectedProductCode"
+            :selection="fullSelection" @added-to-cart="refreshCurrentPage" />
         <ProductDetailDialog
             v-if="selectedProductCode && !selectedProductIsSet"
             v-model:visible="showProductDialog"
             :itemCode="selectedProductCode"
+            @show-full-detail="openFullDetail"
             @added-to-cart="refreshCurrentPage"
         />
         <ProductSetDialog
             v-if="selectedProductCode && selectedProductIsSet"
             v-model:visible="showProductDialog"
             :itemCode="selectedProductCode"
+            @show-full-detail="openFullDetail"
             @added-to-cart="refreshCurrentPage"
         />
     </div>

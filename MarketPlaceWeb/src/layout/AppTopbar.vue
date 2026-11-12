@@ -47,7 +47,7 @@ const mainNavItems = computed(() => {
 const mobileMainNavItems = computed(() => [
     { label: t('nav.home'), icon: 'pi pi-home', to: '/', match: ['/'] },
     { label: t('nav.marketplace'), icon: 'pi pi-th-large', to: '/marketplace', match: ['/marketplace'] },
-    { label: t('nav.cartShort'), icon: 'pi pi-shopping-cart', to: '/cart', authOnly: true, match: ['/cart'] },
+    { label: t('nav.cartShort'), icon: 'pi pi-shopping-cart', to: '/basket', authOnly: true, match: ['/basket', '/cart'] },
     { label: t('nav.menu'), icon: 'pi pi-bars', to: '/account', authOnly: true, match: ['/account', '/favorites', '/profile', '/doc-history', '/advance-payment-history', '/orders-history', '/order-shipping-status', '/admin'] }
 ]);
 
@@ -188,7 +188,7 @@ function goToMobileMainNav(item) {
         router.push(`/auth/login?redirect=${encodeURIComponent(item.to)}`);
         return;
     }
-    if ((item.to === '/cart' && currentPath.value === '/marketplace') || (item.to === '/marketplace' && currentPath.value === '/cart')) {
+    if ((item.to === '/basket' && currentPath.value === '/marketplace') || (item.to === '/marketplace' && ['/basket','/cart'].includes(currentPath.value))) {
         router.push({ path: item.to, query: router.currentRoute.value.query });
         return;
     }

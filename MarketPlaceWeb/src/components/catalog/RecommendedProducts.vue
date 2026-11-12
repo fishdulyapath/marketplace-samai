@@ -219,7 +219,9 @@ function viewProductDetail(product) {
     showProductDetail.value = true;
 }
 
-function openFullProductDetail(itemCode) {
+const fullSelection = ref(null);
+function openFullProductDetail(itemCode, selection = null) {
+    fullSelection.value = selection;
     selectedProductCode.value = itemCode;
     showProductDetail.value = false;
     showProductSetDetail.value = false;
@@ -304,7 +306,7 @@ function handleFavoriteChanged(data) {
             @show-full-detail="openFullProductDetail"
         />
 
-        <ProductFullDetailDialog
+        <ProductFullDetailDialog :selection="fullSelection"
             :visible="showProductFullDetail"
             :item-code="selectedProductCode"
             @update:visible="showProductFullDetail = $event"

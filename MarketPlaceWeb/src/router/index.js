@@ -50,6 +50,10 @@ const router = createRouter({
                 },
                 // หน้าตะกร้าสินค้า
                 {
+                    path: '/basket', name: 'basket', meta: { requiresAuth: true },
+                    component: () => import('@/components/cart/CartOverlay.vue'), props: { visible: true, page: true }
+                },
+                {
                     path: '/cart',
                     name: 'cart',
                     component: () => import('@/views/pages/CartView.vue')
