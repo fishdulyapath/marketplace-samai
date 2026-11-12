@@ -13,6 +13,7 @@ import Tag from 'primevue/tag';
 import { onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
+const emit = defineEmits(['ready']);
 const authenStore = useAuthenStore();
 const languageStore = useLanguageStore();
 const route = useRoute();
@@ -49,6 +50,7 @@ async function load() {
         promos.value = [];
     } finally {
         loading.value = false;
+        emit('ready');
     }
 }
 

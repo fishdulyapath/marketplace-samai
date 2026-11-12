@@ -68,30 +68,16 @@
     /* ความกว้างการ์ดในแถวเลื่อนแนวนอน — มาแทน 152px/132px/240px ที่ hardcode ไว้คนละที่ */
     --shop-rail-card-w: clamp(8.5rem, 30vw, 11rem);
 
-    /* ── ความสูงของแถบตรึงด้านบน — แหล่งความจริงเดียวของทั้งแอป ──────────────
-       ก่อนหน้านี้ค่านี้ถูกเขียนซ้ำเป็นตัวเลขดิบ 5 ที่ (_topbar.scss, AppTopbar padding-top
-       2 ค่า, ProductList sticky-top 3 ค่า) และไม่ตรงกัน ทำให้แถบค้นหาลอยทับใต้เมนู
-       ทั้งที่จอ 860px (ทับ 3.6px) และเดสก์ท็อป 1440px (ทับ 2.1px)
-
-       ⚠️ ถ้าแก้ค่าพวกนี้ ต้องแก้ min-height ของ nav ใน AppTopbar.vue ให้ตรงกันด้วย
-          ไม่งั้นจะกลับไปเพี้ยนแบบเดิม */
     --app-topbar-h: 4rem;
-    --app-subnav-h: 3.25rem;
-    --app-bottomnav-h: 0rem;
-    --app-header-total-h: calc(var(--app-topbar-h) + var(--app-subnav-h));
+    --market-header-height: var(--app-topbar-h);
+    --app-subnav-h: 0px;
+    --app-bottomnav-h: 0px;
+    --app-header-total-h: var(--app-topbar-h);
     --app-safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* ต่ำกว่า lg (992px) เมนูย้ายจากแถวสองด้านบน → แถบล่าง
-   ดังนั้นด้านบนเหลือแค่ topbar (subnav = 0) และต้องเว้นที่ด้านล่างให้แถบเมนูแทน
-   ค่านี้ต้องตรงกับ media query ใน AppTopbar.vue ที่สลับ nav เสมอ */
-@media (max-width: 991.98px) {
-    :root {
-        --app-subnav-h: 0rem;
-        /* 4.3rem = ความสูงจริงของปุ่ม (ไอคอน + ข้อความ + padding) ที่วัดจากเบราว์เซอร์
-           ถ้าตั้งน้อยกว่านี้ แถบจะสูงเกินตัวแปร แล้วปุ่มลอยที่คำนวณจากตัวแปรจะโดนทับ */
-        --app-bottomnav-h: 4.3rem;
-    }
+@media (max-width: 900px) {
+    :root { --app-bottomnav-h: 64px; }
 }
 
 body {

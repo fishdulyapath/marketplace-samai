@@ -26,6 +26,9 @@ const router = createRouter({
                 // รายการโปรดของฉัน (รีวิว 260908 สไลด์ 9)
                 // เป็นหน้าของตัวเอง ไม่ใช่การติ๊ก filter บนหน้าสินค้าทั้งหมด
                 {
+                    path: '/account', name: 'account', component: () => import('@/views/pages/Account.vue'), meta: { requiresAuth: true }
+                },
+                {
                     path: '/favorites',
                     name: 'favorites',
                     meta: { title: 'รายการโปรดของฉัน', requiresAuth: true },

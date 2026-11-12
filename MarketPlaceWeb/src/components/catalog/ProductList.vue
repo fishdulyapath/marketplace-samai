@@ -1,24 +1,34 @@
 <script setup>
+import SalePremiumService from '@/services/SalePremiumService';
+import SalePremiumDetailDialog from './SalePremiumDetailDialog.vue';
+import MobileCategoryTiles from './MobileCategoryTiles.vue';
+import PromotionTag from './PromotionTag.vue';
 import returnIcon from '@/assets/retun.png';
 import ProductService from '@/services/ProductService';
-import SalePremiumService from '@/services/SalePremiumService';
+import { formatPrice, getProductSaleUnit, isSetProduct, resolveProductListPrice, toCatalogNumber } from '@/services/catalogPrice';
 import { useAuthenStore } from '@/stores/authen';
+import { useCartStore } from '@/stores/cartStore';
 import { useLanguageStore } from '@/stores/languageStore';
 import { pickMasterName, pickProductName } from '@/utils/languageDisplay';
-import ProductCard from '@/components/product/ProductCard.vue';
-import SalePremiumDetailDialog from '@/components/catalog/SalePremiumDetailDialog.vue';
+import { cartUnitSummaries } from '@/utils/productUnitSummary';
 import ProductDetailDialog from '@/views/pages/ProductDetailDialog.vue';
 import ProductFullDetailDialog from '@/views/pages/ProductFullDetailDialog.vue';
 import ProductSetDialog from '@/views/pages/ProductSetDialog.vue';
 import Button from 'primevue/button';
+import IconField from 'primevue/iconfield';
+import InputIcon from 'primevue/inputicon';
+import InputText from 'primevue/inputtext';
 import ProgressSpinner from 'primevue/progressspinner';
 import Skeleton from 'primevue/skeleton';
 import Tag from 'primevue/tag';
+import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, nextTick, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 
 const props = defineProps({
+    mobile: Boolean,
+    discoveryReady: Boolean,
     selectedCategory: {
         type: String,
         default: 'all'
@@ -30,21 +40,16 @@ const props = defineProps({
     categories: {
         type: Array,
         default: () => []
-    },
-    // โหมดหน้า "รายการโปรดของฉัน" — ล็อกให้แสดงเฉพาะสินค้าที่กดหัวใจไว้
-    // ปิดชิปสลับรายการโปรดกับแถบหมวดหมู่ เพราะหน้านี้มีหน้าที่เดียว
-    favoriteOnly: {
-        type: Boolean,
-        default: false
     }
 });
 
 const emit = defineEmits(['select-category']);
 const authenStore = useAuthenStore();
+const cartStore = useCartStore();
 const languageStore = useLanguageStore();
 const isAuthenticated = computed(() => authenStore.isAuthenticated);
+const quantitiesInCart = computed(() => cartUnitSummaries(cartStore.cartItems, languageStore.locale));
 const route = useRoute();
-const router = useRouter();
 const t = (key, params) => languageStore.t(key, params);
 const activeViewLabel = computed(() => {
     if (props.selectedCategoryName) return props.selectedCategoryName;
@@ -54,10 +59,6 @@ const activeViewLabel = computed(() => {
     if (props.selectedCategory === 'all') return t('catalog.allProducts');
     return t('catalog.selectedCategory');
 });
-// จำนวนที่ "แสดงอยู่ตอนนี้" ไม่ใช่จำนวนสินค้าทั้งร้าน
-// ไม่นับยอดจริงเพราะต้อง COUNT ด้วยเงื่อนไขเดียวกับ list (join ราคา/สต็อก/หมวด)
-// วัดแล้ว 166ms เทียบกับดึงรายการ 14ms คือแพงกว่า 12 เท่า และต้องจ่ายทุกครั้งที่
-// ค้นหาหรือเลื่อนหน้า — ไม่คุ้มกับตัวเลขที่ผู้ใช้แค่เหลือบมอง
 const resultLabel = computed(() => t('catalog.itemCount', { count: products.value?.length || 0 }));
 const compactCategoryOptions = computed(() => {
     const rows = Array.isArray(props.categories) ? props.categories : [];
@@ -71,15 +72,48 @@ const selectedProductCode = ref('');
 const showProductDetail = ref(false);
 const showProductSetDetail = ref(false);
 const showProductFullDetail = ref(false);
-const selectedSalePremiumCode = ref('');
-const showSalePremiumDetail = ref(false);
 
 // ข้อมูลสินค้าและการค้นหา
 const products = ref([]);
-const searchQuery = ref('');
+const searchQuery = ref(typeof route.query.q === 'string' ? route.query.q : '');
+watch(() => route.query.q, value => { if (route.name === 'catalog') searchQuery.value = value || ''; });
 const loadingProducts = ref(true);
-const favoriteFilterActive = ref(props.favoriteOnly);
+const favoriteFilterActive = ref(false);
 const instockFilterActive = ref(localStorage.getItem('_isstock') === '1');
+const categorySheetOpen = ref(false);
+const categoryStrip = ref(null);
+const results = ref(null);
+const categoryCollapsed = ref(false);
+const pendingCategory = ref(null);
+const waitingForSheet = ref(false);
+const keepResultsInView = ref(false);
+const loadingGrid = ref(null);
+const resultGrid = ref(null);
+const emptyResult = ref(null);
+onDeactivated(() => { pendingCategory.value = null; });
+function scrollToResults() {
+    if (!results.value) return;
+    const top = results.value.getBoundingClientRect().top + window.scrollY - getSearchStickyTopPx() - (searchStripRef.value?.offsetHeight || 0);
+    window.scrollTo({ top });
+}
+async function chooseMobileCategory(code) {
+
+    pendingCategory.value = code;
+    keepResultsInView.value = true;
+    waitingForSheet.value = categorySheetOpen.value;
+    categorySheetOpen.value = false;
+    selectCompactCategory(code);
+    await nextTick();
+    alignMobileCategory();
+}
+const filterSheetOpen = ref(false);
+const draftFavorite = ref(false);
+const draftInStock = ref(false);
+const appliedFilterCount = computed(() => Number(favoriteFilterActive.value) + Number(instockFilterActive.value));
+const mobileLayout = window.matchMedia('(max-width: 900px)');
+function closeSheetOnDesktop(event) {
+    if (!event.matches) { pendingCategory.value = null; filterSheetOpen.value = false; categorySheetOpen.value = false; }
+}
 const isSearching = ref(false); // เพิ่มตัวแปรสำหรับติดตามสถานะการค้นหา
 
 // สำหรับ Skeleton Loading
@@ -100,11 +134,56 @@ const observerTarget = ref(null); // element ที่จะถูกสัง�
 const showScrollTop = ref(false);
 const productListShellRef = ref(null);
 const searchStripRef = ref(null);
+const isSearchFloating = ref(false);
+const searchStripHeight = ref(0);
+const searchFixedLeft = ref(0);
+const searchFixedWidth = ref(0);
+const searchRightGutter = ref(0);
 const compactCategoryTrackRef = ref(null);
 const canCompactScrollLeft = ref(false);
 const canCompactScrollRight = ref(false);
+const searchFixedStyle = computed(() => {
+    if (props.mobile) {
+        if (isSearchFloating.value) return {};
+        return {
+            marginLeft: `-${Math.max(0, searchFixedLeft.value)}px`,
+            marginRight: `-${searchRightGutter.value}px`
+        };
+    }
+    if (!isSearchFloating.value) return {};
+    return {
+        left: `${Math.max(0, searchFixedLeft.value)}px`,
+        width: `${Math.max(0, searchFixedWidth.value)}px`
+    };
+});
 let priceLoadToken = 0;
+let listRequestId = 0;
 
+function alignMobileCategory() {
+    const target = (loadingGrid.value || resultGrid.value)?.firstElementChild || emptyResult.value;
+    const strip = searchStripRef.value;
+    if (!props.mobile || !target?.isConnected || !strip) return;
+    const toolbarBottom = getSearchStickyTopPx() + strip.getBoundingClientRect().height;
+    window.scrollTo({ top: window.scrollY + target.getBoundingClientRect().top - toolbarBottom - 8, behavior: 'instant' });
+    updateSearchFloating();
+}
+
+// Reveal the loaded shelves and align the new first row in the same render cycle.
+watch(
+    () => pendingCategory.value && props.selectedCategory === pendingCategory.value
+        && props.discoveryReady && !loadingProducts.value && !waitingForSheet.value,
+    async ready => {
+        if (!ready) return;
+        const category = pendingCategory.value;
+        pendingCategory.value = null;
+        await nextTick();
+        if (category === props.selectedCategory) alignMobileCategory();
+    },
+    { flush: 'post' }
+);
+
+const selectedSalePremiumCode = ref('');
+const showSalePremiumDetail = ref(false);
 function isSalePremiumProduct(product) {
     return String(product?.item_type ?? '') === '4' || String(product?.sale_premium_code ?? '').trim() !== '';
 }
@@ -129,10 +208,6 @@ function normalizeSalePremiumProduct(promo) {
     };
 }
 
-function getProductSaleUnit(product) {
-    return product.online_sale_unit || product.unit_code || product.start_sale_unit || product.unit_standard || product.unit_cost || '';
-}
-
 function getProductDisplayName(product) {
     return pickProductName(product, languageStore.locale) || product.display_name || product.item_name || '';
 }
@@ -150,30 +225,41 @@ function getCompactCategoryName(category) {
     return specialCategoryKeys[category?.code] ? t(specialCategoryKeys[category.code]) : pickMasterName(category, languageStore.locale) || category?.display_name || category?.name || category?.code || '';
 }
 
-// เปลี่ยนหมวดแล้วรายการสินค้าถูกล้างเพื่อโหลดชุดใหม่ ความสูงหน้าหดวูบ browser จึง
-// ดัน scroll ขึ้นไปเอง (มักถึงบนสุด) — ตรึง viewport ไว้ที่หัวกล่องสินค้าแทน
-// offset ใช้ค่า top จริงของแถบค้นหา sticky เพื่อไม่ให้หัวกล่องมุดใต้ topbar
-function scrollToProductListShell() {
-    const shell = productListShellRef.value;
-    if (!shell) return;
-    const stickyTop = searchStripRef.value ? parseFloat(getComputedStyle(searchStripRef.value).top) || 0 : 0;
-    const targetTop = shell.getBoundingClientRect().top + window.scrollY - stickyTop;
-    window.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
-}
-
-// ตรึงสองจังหวะ: ทันทีที่กด (กันหน้าหดตอนเริ่มโหลด) และซ้ำอีกครั้งหลังรายการหมวดใหม่
-// render เสร็จ (response มาช้า หน้าหด/ขยายอีกรอบ browser อาจหนีบ scroll หนีไปได้)
-let pinShellAfterReload = false;
-
 function selectCompactCategory(categoryCode) {
-    pinShellAfterReload = true;
     emit('select-category', categoryCode || 'all');
-    nextTick(scrollToProductListShell);
+
 }
 
-// ลบ updateSearchFloating/getSearchStickyTopPx ทิ้งแล้ว — เดิมสลับแถบค้นหาเป็น position:fixed เอง
-// ตรวจบนเบราว์เซอร์จริงแล้วพบว่า isSearchFloating ไม่เคยเป็น true เลย (scroll 1500px ก็ไม่ติด)
-// ขณะที่ position:sticky ทำงานถูกต้องอยู่แล้ว เพราะไม่มี ancestor ตัวใดตั้ง overflow ไว้
+function getSearchStickyTopPx() {
+    const source = productListShellRef.value || document.documentElement;
+    const raw = window.getComputedStyle(source).getPropertyValue('--product-search-sticky-top').trim();
+    const value = parseFloat(raw);
+    if (!Number.isFinite(value)) return 0;
+    if (raw.endsWith('rem')) {
+        const rootFontSize = parseFloat(window.getComputedStyle(document.documentElement).fontSize) || 16;
+        return value * rootFontSize;
+    }
+    return value;
+}
+
+function updateSearchFloating() {
+    const shell = productListShellRef.value;
+    const strip = searchStripRef.value;
+    if (!shell || !strip) return;
+
+    const top = getSearchStickyTopPx();
+    const shellRect = shell.getBoundingClientRect();
+    const height = strip.offsetHeight || searchStripHeight.value || 0;
+
+    const toolbarStart = categoryStrip.value?.getBoundingClientRect().bottom ?? shellRect.top;
+    categoryCollapsed.value = !!categoryStrip.value && toolbarStart <= top + 1;
+    searchStripHeight.value = height;
+    searchFixedLeft.value = shellRect.left;
+    searchFixedWidth.value = shellRect.width;
+    if (props.mobile) searchRightGutter.value = Math.max(0, document.documentElement.clientWidth - shellRect.right);
+    isSearchFloating.value = toolbarStart <= top && shellRect.bottom > top + height + 12;
+}
+
 function updateCompactCategoryScroll() {
     const el = compactCategoryTrackRef.value;
     if (!el) {
@@ -195,101 +281,10 @@ function scrollCompactCategories(direction) {
     updateCompactCategoryScroll();
 }
 
-function toCatalogNumber(value, fallback = 0) {
-    const numberValue = typeof value === 'string' ? Number(value.replace(/,/g, '').trim()) : Number(value);
-    return Number.isFinite(numberValue) ? numberValue : fallback;
-}
-
-function formatPrice(value) {
-    const price = toCatalogNumber(value, NaN);
-    if (!Number.isFinite(price) || price <= 0) return '';
-    return price.toLocaleString('th-TH', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-    });
-}
-
-function hasSalePrice(value) {
-    const price = toCatalogNumber(value, NaN);
-    return Number.isFinite(price) && price > 0;
-}
-
-function getUnitStandValue(unit) {
-    const standValue = toCatalogNumber(unit?.stand_value, NaN);
-    return Number.isFinite(standValue) && standValue > 0 ? standValue : Number.POSITIVE_INFINITY;
-}
-
-function pickSmallestStandValueUnit(productDetail) {
-    const units = [productDetail, ...(productDetail?.otherUnits || [])].filter((unit) => unit?.unit_code);
-    if (!units.length) return productDetail;
-    return [...units].sort((a, b) => {
-        const standDiff = getUnitStandValue(a) - getUnitStandValue(b);
-        if (standDiff !== 0) return standDiff;
-        return String(a.unit_code || '').localeCompare(String(b.unit_code || ''), 'th');
-    })[0];
-}
-
-function getSetDetailSaleUnit(productDetail, listProduct) {
-    const preferredUnit = listProduct?.online_sale_unit || '';
-    const units = [productDetail, ...(productDetail?.otherUnits || [])].filter((unit) => unit?.unit_code);
-    return units.find((unit) => unit.unit_code === preferredUnit) || pickSmallestStandValueUnit(productDetail);
-}
-
-async function resolveProductListPrice(product) {
-    if (isSetProduct(product)) {
-        const setResult = await ProductService.getProductSetByItemCode(product.item_code);
-        const selectedUnit = getSetDetailSaleUnit(setResult?.data, product);
-
-        return {
-            price: hasSalePrice(selectedUnit?.price) ? selectedUnit.price : 0,
-            unit_code: selectedUnit?.unit_code || getProductSaleUnit(product),
-            barcode: selectedUnit?.barcode || product.barcode || '',
-            wh_code: selectedUnit?.wh_code || product.wh_code || '',
-            shelf_code: selectedUnit?.shelf_code || product.shelf_code || '',
-            ratio: selectedUnit?.ratio || product.ratio || '1',
-            stand_value: selectedUnit?.stand_value || product.stand_value || '1',
-            divide_value: selectedUnit?.divide_value || product.divide_value || '1'
-        };
-    }
-
-    if (!product.online_sale_unit) {
-        try {
-            const detailResult = await ProductService.getProductByItemCode(product.item_code);
-            const selectedUnit = pickSmallestStandValueUnit(detailResult?.data);
-            if (selectedUnit?.unit_code) {
-                return {
-                    price: hasSalePrice(selectedUnit.price) ? selectedUnit.price : 0,
-                    unit_code: selectedUnit.unit_code,
-                    barcode: selectedUnit.barcode || product.barcode || '',
-                    wh_code: selectedUnit.wh_code || product.wh_code || '',
-                    shelf_code: selectedUnit.shelf_code || product.shelf_code || '',
-                    ratio: selectedUnit.ratio || product.ratio || '1',
-                    stand_value: selectedUnit.stand_value || product.stand_value || '1',
-                    divide_value: selectedUnit.divide_value || product.divide_value || '1'
-                };
-            }
-        } catch (error) {
-            console.warn(`Unable to resolve visible sale unit for ${product.item_code}`, error);
-        }
-    }
-
-    const unitCode = getProductSaleUnit(product);
-
-    const priceResult = await ProductService.getProductPrice(product.item_code, unitCode, '1', localStorage.getItem('_userCode') || '', {
-        barcode: product.barcode || ''
-    });
-
-    return {
-        price: hasSalePrice(priceResult?.price) ? priceResult.price : 0,
-        unit_code: unitCode,
-        barcode: product.barcode || priceResult?.barcode || ''
-    };
-}
-
 async function loadProductPrices(targetProducts) {
     if (!isAuthenticated.value || !Array.isArray(targetProducts) || targetProducts.length === 0) return;
 
-    const currentToken = ++priceLoadToken;
+    const currentToken = priceLoadToken;
     const productsToPrice = targetProducts.filter((product) => product.item_code && !isSalePremiumProduct(product));
 
     productsToPrice.forEach((product) => {
@@ -341,13 +336,7 @@ async function loadProductPrices(targetProducts) {
 
 onMounted(() => {
     // ตรวจสอบค่า favorite จาก query parameters
-    // โหมด favoriteOnly ล็อกไว้เสมอ ไม่ให้ query มาปลดออกได้
-    favoriteFilterActive.value = props.favoriteOnly || route.query.favorite === '1';
-
-    // คำค้นจาก URL (ช่องค้นหาบนแถบหัวเขียน ?q= มาให้) — เข้าเส้นทาง debounce เดิมผ่าน watch(searchQuery)
-    if (typeof route.query.q === 'string' && route.query.q !== searchQuery.value) {
-        searchQuery.value = route.query.q;
-    }
+    favoriteFilterActive.value = route.query.favorite === '1';
 
     if (localStorage.getItem('_isstock') === null) {
         localStorage.setItem('_isstock', '0');
@@ -356,20 +345,19 @@ onMounted(() => {
     // โหลดข้อมูลสินค้าทันที
     loadProducts();
 
-    // ตั้งค่า Intersection Observer หลังจากโหลดข้อมูลเสร็จ
-    nextTick(() => {
-        setupInfiniteScroll();
-    });
-
     // เพิ่ม event listener สำหรับการเลื่อน
     window.addEventListener('scroll', checkScrollPosition);
+    window.addEventListener('resize', updateSearchFloating);
     window.addEventListener('resize', updateCompactCategoryScroll);
+    mobileLayout.addEventListener('change', closeSheetOnDesktop);
     nextTick(() => {
+        updateSearchFloating();
         updateCompactCategoryScroll();
     });
 });
 
 onUnmounted(() => {
+    listRequestId++;
     // ทำความสะอาด observer เมื่อออกจากหน้า
     if (observer) {
         observer.disconnect();
@@ -377,36 +365,28 @@ onUnmounted(() => {
 
     // ลบ event listener เมื่อออกจากหน้า
     window.removeEventListener('scroll', checkScrollPosition);
+    window.removeEventListener('resize', updateSearchFloating);
     window.removeEventListener('resize', updateCompactCategoryScroll);
+    mobileLayout.removeEventListener('change', closeSheetOnDesktop);
+    clearTimeout(searchTimeout);
 });
 
 // ตั้งค่า Intersection Observer สำหรับการโหลดข้อมูลแบบ Infinite Scroll
 let observer;
-function setupInfiniteScroll() {
-    // สร้าง IntersectionObserver ใหม่
-    observer = new IntersectionObserver(
-        (entries) => {
-            if (entries[0].isIntersecting && !isLoadingMore.value && hasMoreItems.value && !initialLoading.value) {
-                loadMoreProducts();
-            }
-        },
-        { threshold: 0.1, rootMargin: '100px' }
-    );
-
-    // เริ่มสังเกต element เมื่อมีการสร้าง element แล้ว
-    setTimeout(() => {
-        if (observerTarget.value) {
-            observer.observe(observerTarget.value);
-        } else {
-            console.warn('Observer target not found');
-        }
-    }, 500);
-}
+watch(observerTarget, (target) => {
+    observer?.disconnect();
+    if (!target) return;
+    observer = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting && !initialLoading.value) loadMoreProducts();
+    }, { threshold: 0.1, rootMargin: '100px' });
+    observer.observe(target);
+}, { flush: 'post' });
 
 // ฟังก์ชันตรวจสอบตำแหน่งการเลื่อน
 function checkScrollPosition() {
     // แสดงปุ่มเมื่อเลื่อนลงมากกว่า 300px
     showScrollTop.value = window.scrollY > 300;
+    updateSearchFloating();
 }
 
 // ฟังก์ชันสำหรับเลื่อนกลับไปด้านบนสุด
@@ -419,7 +399,12 @@ function scrollToTop() {
 
 // โหลดข้อมูลสินค้าหน้าแรก
 async function loadProducts() {
+    priceLoadToken++;
+    initialLoading.value = true;
+    products.value = [];
+    const requestId = ++listRequestId;
     loadingProducts.value = true;
+    isLoadingMore.value = false;
     try {
         const isProductSet = props.selectedCategory === 'productset';
         const filters = {
@@ -441,6 +426,7 @@ async function loadProducts() {
                   })
                 : Promise.resolve([])
         ]);
+        if (requestId !== listRequestId) return;
 
         // รีเซ็ตและเพิ่มข้อมูลใหม่
         products.value = [...salePremiumRows.map(normalizeSalePremiumProduct), ...result.data];
@@ -455,13 +441,12 @@ async function loadProducts() {
 
         // หลังจากโหลดข้อมูลแล้ว ลองติดตั้ง observer อีกครั้ง
         nextTick(() => {
+            updateSearchFloating();
             updateCompactCategoryScroll();
-            if (observer) {
-                observer.disconnect();
-            }
-            setupInfiniteScroll();
+
         });
     } catch (error) {
+        if (requestId !== listRequestId) return;
         console.error('Error loading products:', error);
         toast.add({
             severity: 'error',
@@ -472,19 +457,18 @@ async function loadProducts() {
         // แม้จะมีข้อผิดพลาด ก็ยังต้องยกเลิกสถานะการโหลด
         initialLoading.value = false;
     } finally {
-        if (pinShellAfterReload) {
-            pinShellAfterReload = false;
-            nextTick(scrollToProductListShell);
+        if (requestId === listRequestId) {
+            loadingProducts.value = false;
+            isSearching.value = false;
         }
-        loadingProducts.value = false;
-        isSearching.value = false; // รีเซ็ตสถานะการค้นหา เมื่อโหลดเสร็จ
     }
 }
 
 // โหลดข้อมูลสินค้าเพิ่มเติม (สำหรับ infinite scroll)
 async function loadMoreProducts() {
-    if (isLoadingMore.value || !hasMoreItems.value) return;
+    if (loadingProducts.value || isLoadingMore.value || !hasMoreItems.value) return;
 
+    const requestId = listRequestId;
     isLoadingMore.value = true;
 
     try {
@@ -499,15 +483,17 @@ async function loadMoreProducts() {
 
         const nextPage = pagination.value.page + 1;
         const result = await ProductService.getProducts(filters, nextPage);
+        if (requestId !== listRequestId) return;
 
         // เพิ่มข้อมูลลงในอาร์เรย์ products เดิม
         products.value = [...products.value, ...result.data];
         pagination.value.page = nextPage;
-        loadProductPrices(result.data);
+        if (result.data.length) loadProductPrices(products.value.slice(-result.data.length));
 
         // ตรวจสอบว่ายังมีข้อมูลให้โหลดต่อหรือไม่
         hasMoreItems.value = result.data.length >= pagination.value.perPage;
     } catch (error) {
+        if (requestId !== listRequestId) return;
         console.error('Error loading more products:', error);
         toast.add({
             severity: 'error',
@@ -516,7 +502,7 @@ async function loadMoreProducts() {
             life: 3000
         });
     } finally {
-        isLoadingMore.value = false;
+        if (requestId === listRequestId) isLoadingMore.value = false;
     }
 }
 
@@ -525,6 +511,10 @@ function handleLoadMore() {
     if (!isLoadingMore.value && hasMoreItems.value) {
         loadMoreProducts();
     }
+}
+
+function getInventoryStatus(soldOut) {
+    return soldOut === '1' ? 'OUTOFSTOCK' : 'INSTOCK';
 }
 
 function getInventoryLabel(soldOut) {
@@ -552,6 +542,7 @@ function debouncedSearch() {
 
     searchTimeout = setTimeout(() => {
         filterProducts();
+        if (searchQuery.value.trim()) nextTick(scrollToResults);
         nextTick(updateCompactCategoryScroll);
         // เมื่อส่งคำขอไปแล้ว ให้ยังคงแสดงสถานะกำลังค้นหาต่อไป
         // สถานะนี้จะถูกรีเซ็ตใน loadProducts เมื่อโหลดเสร็จ
@@ -560,6 +551,7 @@ function debouncedSearch() {
 
 // กรองและเรียงลำดับสินค้า
 function filterProducts() {
+    clearTimeout(searchTimeout);
     // รีเซ็ตการเพจจิเนชั่น
     pagination.value.page = 0;
     hasMoreItems.value = true;
@@ -571,36 +563,31 @@ function filterProducts() {
 // เพิ่มฟังก์ชันล้างการค้นหา
 function clearSearch() {
     searchQuery.value = '';
+    filterProducts();
+}
 
-    // ต้องลบ q ออกจาก URL ด้วย ไม่งั้น watch(route.query.q) จะเติมคำค้นกลับมาทันที
-    if (route.query.q) {
-        const query = { ...route.query };
-        delete query.q;
-        router.replace({ path: route.path, query });
+function setFilters(favorite, inStock) {
+    favoriteFilterActive.value = favorite;
+    instockFilterActive.value = inStock;
+    localStorage.setItem('_favorite', favorite ? '1' : '0');
+    localStorage.setItem('_isstock', inStock ? '1' : '0');
+    filterProducts();
+}
+
+function openFilterSheet() {
+    draftFavorite.value = favoriteFilterActive.value;
+    draftInStock.value = instockFilterActive.value;
+    filterSheetOpen.value = true;
+}
+
+function applyMobileFilters() {
+    filterSheetOpen.value = false;
+    if (draftFavorite.value !== favoriteFilterActive.value || draftInStock.value !== instockFilterActive.value) {
+        setFilters(draftFavorite.value, draftInStock.value);
     }
-
-    filterProducts();
-}
-
-function toggleFavoriteFilter() {
-    // หน้ารายการโปรดปิดตัวกรองนี้ไม่ได้ ไม่งั้นจะกลายเป็นหน้าสินค้าทั้งหมด
-    if (props.favoriteOnly) return;
-    favoriteFilterActive.value = !favoriteFilterActive.value;
-    localStorage.setItem('_favorite', favoriteFilterActive.value ? '1' : '0');
-    filterProducts();
-}
-
-function toggleInstockFilter() {
-    instockFilterActive.value = !instockFilterActive.value;
-    localStorage.setItem('_isstock', instockFilterActive.value ? '1' : '0');
-    filterProducts();
 }
 
 // เปิด Dialog แสดงรายละเอียดสินค้า
-function isSetProduct(product) {
-    return String(product?.item_type || '') === '3';
-}
-
 function viewProductDetail(product) {
     if (isSalePremiumProduct(product)) {
         selectedSalePremiumCode.value = product.sale_premium_code || product.item_code;
@@ -611,7 +598,6 @@ function viewProductDetail(product) {
         return;
     }
     selectedProductCode.value = product.item_code;
-    showSalePremiumDetail.value = false;
     showProductFullDetail.value = false;
     if (isSetProduct(product)) {
         showProductDetail.value = false;
@@ -631,7 +617,7 @@ function openFullProductDetail(itemCode) {
 }
 
 // จัดการเมื่อมีการเพิ่มสินค้าลงตะกร้าจาก Dialog
-function handleAddedToCart() {
+function handleAddedToCart(cartItem) {
     // toast.add({
     //     severity: 'success',
     //     summary: 'เพิ่มสินค้าแล้ว',
@@ -643,7 +629,7 @@ function handleAddedToCart() {
 // ล้างตัวกรองทั้งหมด
 function clearFilters() {
     searchQuery.value = '';
-    filterProducts();
+    setFilters(false, false);
 }
 
 // ฟังก์ชันเปลี่ยนสถานะรายการโปรด
@@ -657,7 +643,7 @@ function toggleFavorite(product, event) {
     const oldFavoriteStatus = product.favorite_item;
 
     // สลับค่า favorite_item ระหว่าง "0" และ "1"
-    product.favorite_item = product.favorite_item === '1' ? '0' : '1';
+    product.favorite_item = Number(product.favorite_item) === 1 ? '0' : '1';
 
     // อัพเดตสถานะโดยไม่ต้องโหลดข้อมูลใหม่ทั้งหมด
     // ให้ส่งคำขอไปที่ API แบบเดิม แต่ไม่ต้องรอผลลัพธ์เพื่อแสดงการเปลี่ยนแปลงในหน้าจอ
@@ -674,76 +660,27 @@ function toggleFavorite(product, event) {
     });
 }
 
-// คำค้นจากแถบหัว: AppTopbar debounce 1.5 วินาทีก่อนเขียน URL มาแล้ว
-// จึงโหลดทันทีเมื่อ q เปลี่ยน ไม่ debounce ซ้ำอีก 1 วินาทีจนผู้ใช้ต้องรอรวม 2.5 วินาที
-let syncingSearchFromRoute = false;
-watch(
-    () => route.query.q,
-    (q) => {
-        const next = typeof q === 'string' ? q : '';
-        if (next !== searchQuery.value) {
-            syncingSearchFromRoute = true;
-            searchQuery.value = next;
-            syncingSearchFromRoute = false;
-        }
-    }
-);
-
 // ติดตามการเปลี่ยนแปลงของตัวกรอง
 watch(
     [() => props.selectedCategory, () => route.query.favorite, () => route.query.timestamp],
-    () => {
-        // อัปเดตสถานะ favoriteFilterActive จาก query parameters
-        // 🚨 โหมด favoriteOnly ต้องไม่ถูกเขียนทับ — หน้ารายการโปรดไม่มี ?favorite=1 ใน URL
-        //    พอค้นหาแล้ว query เปลี่ยน watcher นี้จะยิงและปลดตัวกรองทิ้ง
-        //    ผลคือสินค้าที่ไม่ได้กดหัวใจโผล่มาในหน้ารายการโปรด
-        favoriteFilterActive.value = props.favoriteOnly || route.query.favorite === '1';
+    ([category, favorite], [previousCategory, previousFavorite]) => {
+        if (route.name !== 'catalog') return;
+        if (!props.mobile && category !== previousCategory) nextTick(scrollToResults);
+        if (favorite !== previousFavorite) favoriteFilterActive.value = favorite === '1';
         filterProducts();
-    },
-    { deep: true }
+    }
 );
 
 // แยกการติดตามการเปลี่ยนแปลงของ searchQuery ออกมา และใช้ debouncedSearch
 watch(compactCategoryOptions, () => nextTick(updateCompactCategoryScroll), { deep: false });
 
-watch(
-    searchQuery,
-    () => {
-        if (syncingSearchFromRoute) {
-            if (searchTimeout) clearTimeout(searchTimeout);
-            isSearching.value = true;
-            filterProducts();
-            nextTick(updateCompactCategoryScroll);
-            return;
-        }
-        debouncedSearch();
-    },
-    { flush: 'sync' }
-);
+watch(searchQuery, debouncedSearch, { flush: 'sync' });
 
-watch(isAuthenticated, (loggedIn) => {
+watch([isAuthenticated, () => authenStore.userCode], () => {
     priceLoadToken++;
-    if (loggedIn) {
-        loadProductPrices(products.value);
-    }
+    products.value = [];
+    filterProducts();
 });
-
-// ติดตามการเปลี่ยนแปลงของ products เพื่อตรวจสอบ observer
-watch(
-    products,
-    () => {
-        nextTick(() => {
-            // ตรวจสอบและรีเซ็ต observer เมื่อข้อมูลเปลี่ยน
-            if (observerTarget.value && !initialLoading.value) {
-                if (observer) {
-                    observer.disconnect();
-                }
-                setupInfiniteScroll();
-            }
-        });
-    },
-    { deep: false }
-);
 
 function handleFavoriteChanged(data) {
     // หาสินค้าในรายการและอัพเดทสถานะ
@@ -756,39 +693,49 @@ function handleFavoriteChanged(data) {
 
 <template>
     <div ref="productListShellRef" class="product-list-shell">
+        <Toast position="top-right" />
+
+        <section v-if="mobile" ref="categoryStrip" class="mobile-category-strip">
+            <button class="browse-categories" type="button" aria-haspopup="dialog" @click="categorySheetOpen = true">{{ t('catalog.browseCategories') }} <i class="pi pi-chevron-down"></i></button>
+            <MobileCategoryTiles :categories="compactCategoryOptions" :selected="selectedCategory" :label="getCompactCategoryName" @select="chooseMobileCategory" />
+        </section>
+
         <!-- ช่องค้นหา -->
-        <div ref="searchStripRef" class="search-strip">
+        <div v-if="isSearchFloating" class="search-strip-spacer" :style="{ height: `${searchStripHeight}px` }"></div>
+        <div ref="searchStripRef" class="search-strip" :class="{ 'is-floating': isSearchFloating }" :style="searchFixedStyle">
             <div class="search-strip-head">
                 <div class="search-context">
                     <p class="search-title">{{ activeViewLabel }}</p>
-                    <p class="search-subtitle">
-                        <i v-if="isSearching" class="pi pi-spin pi-spinner"></i>
-                        {{ resultLabel }}
-                    </p>
+                    <p class="search-subtitle">{{ resultLabel }}</p>
                 </div>
                 <div class="search-actions">
-                    <button v-if="!favoriteOnly" type="button" class="filter-chip favorite-chip" :class="{ active: favoriteFilterActive }" :aria-pressed="favoriteFilterActive" :aria-label="t('catalog.favoriteProducts')" @click="toggleFavoriteFilter">
+                    <button type="button" class="filter-chip favorite-chip" :class="{ active: favoriteFilterActive }" :aria-pressed="favoriteFilterActive" :aria-label="t('catalog.favoriteProducts')" @click="setFilters(!favoriteFilterActive, instockFilterActive)">
                         <i class="pi" :class="favoriteFilterActive ? 'pi-heart-fill' : 'pi-heart'"></i>
                         {{ t('catalog.favoriteProducts') }}
                     </button>
-                    <button type="button" class="filter-chip" :class="{ active: instockFilterActive }" :aria-pressed="instockFilterActive" :aria-label="t('catalog.inStockOnly')" @click="toggleInstockFilter">
+                    <button type="button" class="filter-chip" :class="{ active: instockFilterActive }" :aria-pressed="instockFilterActive" :aria-label="t('catalog.inStockOnly')" @click="setFilters(favoriteFilterActive, !instockFilterActive)">
                         <i class="pi pi-check-circle"></i>
                         {{ t('catalog.inStockOnly') }}
                     </button>
                 </div>
             </div>
-            <!-- ช่องค้นหาย้ายขึ้นไปอยู่บนแถบหัวแล้ว (ค้นได้จากทุกหน้า)
-                 แต่ searchQuery / debounce / isSearching ยังอยู่ครบใน <script>
-                 เพราะรับคำค้นจาก ?q= ใน URL ผ่าน watch — ห้ามลบ state พวกนั้น
-                 ป้ายคำค้นปัจจุบันแสดงเป็นชิปด้านล่างให้กดล้างได้ -->
-            <div v-if="searchQuery" class="active-search-chip">
-                <i class="pi pi-search"></i>
-                <span>{{ searchQuery }}</span>
-                <button type="button" :aria-label="t('common.clearSearch')" @click="clearSearch">
-                    <i class="pi pi-times"></i>
+            <div class="catalog-search-toolbar">
+                <IconField iconPosition="left" class="w-full">
+                    <InputText v-model="searchQuery" type="text" :placeholder="t('catalog.searchPlaceholder')" :aria-label="t('catalog.searchPlaceholder')" class="w-full modern-search-input" />
+                    <InputIcon v-if="!isSearching && !searchQuery" class="pi pi-search search-spinner" />
+                    <button v-else-if="!isSearching && searchQuery" type="button" class="search-icon-button pi pi-times" :aria-label="t('common.clearSearch')" @click="clearSearch"></button>
+                    <InputIcon v-else class="pi pi-spin pi-spinner search-spinner" />
+                </IconField>
+                <button v-if="mobile && categoryCollapsed" type="button" class="mobile-filter-trigger category-trigger" aria-haspopup="dialog" :aria-expanded="categorySheetOpen" @click="categorySheetOpen = true">
+                    <span>{{ getCompactCategoryName(compactCategoryOptions.find(c => c.code === selectedCategory) || { code: selectedCategory }) }}</span><i class="pi pi-chevron-down"></i>
+                </button>
+                <button type="button" :aria-label="t('catalog.filterButton')" class="mobile-filter-trigger" :class="{ active: appliedFilterCount }"
+                    aria-haspopup="dialog" :aria-expanded="filterSheetOpen" @click="openFilterSheet">
+                    <i class="pi pi-sliders-h" aria-hidden="true"></i>
+                    <span v-if="!categoryCollapsed">{{ t('catalog.filterButton') }}</span><span v-if="appliedFilterCount">({{ appliedFilterCount }})</span>
                 </button>
             </div>
-            <div v-if="compactCategoryOptions.length && !favoriteOnly" class="compact-category-scroller">
+            <div v-if="!mobile && compactCategoryOptions.length" class="compact-category-scroller">
                 <button type="button" class="compact-category-arrow" :class="{ disabled: !canCompactScrollLeft }" :disabled="!canCompactScrollLeft" aria-label="เลื่อนหมวดหมู่ไปทางซ้าย" @click="scrollCompactCategories(-1)">
                     <i class="pi pi-chevron-left"></i>
                 </button>
@@ -812,10 +759,37 @@ function handleFavoriteChanged(data) {
             </div>
         </div>
 
+        <div v-if="mobile" v-show="!pendingCategory" class="mobile-discovery">
+            <slot name="discovery" />
+        </div>
+        <Dialog v-model:visible="categorySheetOpen" @after-hide="waitingForSheet = false" modal dismissableMask blockScroll position="bottom" :draggable="false" class="catalog-filter-sheet catalog-category-sheet" :header="t('catalog.chooseCategory')" :closeButtonProps="{ text: true, severity: 'secondary', class: 'catalog-filter-close', 'aria-label': t('common.close') }">
+            <MobileCategoryTiles grid :categories="compactCategoryOptions" :selected="selectedCategory" :label="getCompactCategoryName" @select="chooseMobileCategory" />
+        </Dialog>
+        <Dialog v-model:visible="filterSheetOpen" modal dismissableMask position="bottom" :draggable="false"
+            class="catalog-filter-sheet" :header="t('catalog.filterTitle')" :closeButtonProps="{ text: true, severity: 'secondary', class: 'catalog-filter-close', 'aria-label': t('common.close') }">
+            <div class="filter-sheet-options">
+                <label for="catalog-mobile-favorite">
+                    {{ t('catalog.favoriteProducts') }}
+                    <ToggleSwitch inputId="catalog-mobile-favorite" v-model="draftFavorite" />
+                </label>
+                <label for="catalog-mobile-stock">
+                    {{ t('catalog.inStockOnly') }}
+                    <ToggleSwitch inputId="catalog-mobile-stock" v-model="draftInStock" />
+                </label>
+            </div>
+            <template #footer>
+                <div class="filter-sheet-actions">
+                    <button type="button" class="sheet-clear" @click="draftFavorite = false; draftInStock = false">{{ t('common.clearFilters') }}</button>
+                    <Button type="button" :label="t('catalog.showProducts')" @click="applyMobileFilters" />
+                </div>
+            </template>
+        </Dialog>
+
         <!-- เนื้อหาหลัก -->
-        <main class="pb-6">
+        <main ref="results" class="pb-6" :class="{ 'aligned-mobile-results': mobile && keepResultsInView }">
+            <h2 v-if="mobile" class="results-heading">{{ activeViewLabel }}</h2>
             <!-- Skeleton Loading -->
-            <div v-if="initialLoading" class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
+            <div v-if="initialLoading || pendingCategory" ref="loadingGrid" class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-4">
                 <div v-for="i in 8" :key="i" class="catalog-card skeleton-card">
                     <Skeleton height="200px" />
                     <div class="p-3">
@@ -831,32 +805,31 @@ function handleFavoriteChanged(data) {
             </div>
 
             <!-- ตารางแสดงสินค้า -->
-            <div v-else-if="products && products.length > 0" class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
+            <div v-else-if="products && products.length > 0" ref="resultGrid" class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 p-4">
                 <!-- ส่วนแสดงสินค้า -->
-                <ProductCard
+                <div
                     v-for="product in products"
-                    :key="`${product.item_type || '0'}:${product.item_code}`"
-                    class="catalog-card"
-                    :name="getProductDisplayName(product)"
-                    :image="product.image"
-                    :fallback-image="product.imageFallback"
+                    :key="product.item_code"
+                    class="catalog-card cursor-pointer"
+                    role="button"
+                    tabindex="0"
                     :aria-label="`${t('productDetail.viewMoreDetails')} ${getProductDisplayName(product)}`"
-                    @select="viewProductDetail(product)"
+                    :aria-describedby="isAuthenticated && quantitiesInCart.has(product.item_code) ? 'catalog-qty-' + encodeURIComponent(product.item_code) : undefined"
+                    @click="viewProductDetail(product)"
+                    @keydown.enter.prevent="viewProductDetail(product)"
+                    @keydown.space.prevent="viewProductDetail(product)"
                 >
-                    <template #badges>
-                        <Tag v-if="isSalePremiumProduct(product)" value="ของแถม" severity="danger" icon="pi pi-gift" class="sale-premium-tag" />
-                        <Tag v-if="product.is_promotion === '1' && !isSalePremiumProduct(product)" value="PROMOTION" class="promotion-tag" />
-                        <Tag v-if="shouldShowPreorderBadge(product)" :value="t('productDetail.preorderLabel')" class="inventory-tag is-preorder" />
-                        <Tag v-if="shouldShowOutOfStockBadge(product)" :value="getInventoryLabel(product.sold_out)" class="inventory-tag is-out" />
-                    </template>
+                    <div class="relative product-image-wrap">
+                        <img :src="product.image" :alt="getProductDisplayName(product)" class="w-full aspect-square object-contain" @error="$event.target.src = product.imageFallback" />
 
-                    <template #media>
-                        <!-- ไอคอน "คืนสินค้าได้" ทับที่มุมล่างซ้ายของรูป
-                             เดิมอยู่ในแถวราคาและสูง 3.8rem ทำให้แถวราคาสูงไม่เท่ากันระหว่างการ์ด
-                             ที่มีกับไม่มีไอคอน (การ์ดในแถวเดียวกันจึงสูงไม่เท่ากัน) -->
-                        <img v-if="product.is_return === '1'" :src="returnIcon" :alt="t('productDetail.returnAlt')" class="product-return-icon" />
+                        <!-- สถานะสินค้าและ promotion tag -->
+                        <div class="absolute top-2 left-2 flex gap-1.5 flex-wrap items-start product-status-badges">
+                            <Tag v-if="shouldShowPreorderBadge(product)" :value="t('productDetail.preorderLabel')" class="inventory-tag is-preorder" />
+                            <Tag v-if="shouldShowOutOfStockBadge(product)" :value="getInventoryLabel(product.sold_out)" class="inventory-tag is-out" />
 
-                        <!-- ปุ่มรายการโปรด — @click.stop กันไม่ให้ไปเปิด dialog ของการ์ด -->
+                        </div>
+
+                        <!-- แสดงปุ่มรายการโปรด (สามารถคลิกได้) -->
                         <div v-if="isAuthenticated && !isSalePremiumProduct(product)" class="absolute right-2 top-2 cursor-pointer" @click.stop="toggleFavorite(product, $event)">
                             <Button
                                 :icon="product.favorite_item === '1' || product.favorite_item === 1 ? 'pi pi-heart-fill' : 'pi pi-heart'"
@@ -867,33 +840,50 @@ function handleFavoriteChanged(data) {
                                 style="width: 2rem; height: 2rem"
                             />
                         </div>
-                    </template>
+                    </div>
 
-                    <!-- หมวดหมู่ (ซ่อนเมื่อไม่มีข้อมูล — API ของหน้า list ไม่ส่ง category มา) -->
-                    <template v-if="getProductCategoryDisplay(product)" #eyebrow>
+                    <div class="p-3 product-content-wrap">
+                        <!-- รหัสสินค้า -->
+                        <!-- <div class="text-xs text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-1">
+                            รหัส: {{ product.item_code }}
+                            <img v-if="product.is_return === '1'" :src="returnIcon" alt="นโยบายการคืนสินค้า" class="w-6 h-6 object-contain" />
+                        </div> -->
+
+                        <!-- ชื่อสินค้า -->
+                        <div class="mb-2 font-medium text-sm line-clamp-2 product-name justify-center" v-tooltip="getProductDisplayName(product)">
+                            <Tag v-if="isSalePremiumProduct(product)" :value="t('catalog.freeGift')" severity="danger" />
+                            <Tag v-else-if="selectedCategory !== 'promotions' && product.is_promotion === '1'" value="PROMOTION" class="promotion-tag" />
+                            <span> {{ getProductDisplayName(product) }}</span>
+                        </div>
+                        <PromotionTag v-if="!isSalePremiumProduct(product) && selectedCategory === 'promotions'" :offer="product.promotion_tag" />
+
+                        <!-- หมวดหมู่ -->
                         <div class="text-xs text-gray-500 dark:text-gray-400 mb-2">
                             {{ getProductCategoryDisplay(product) }}
                         </div>
-                    </template>
-                    <!-- ราคาอยู่ใน slot เพราะมี 4 สถานะเฉพาะของหน้านี้
-                         (กำลังโหลด / มีราคา / หาราคาไม่เจอ / รอราคา) และ formatPrice ของหน้านี้รับ price ไม่ใช่ product -->
-                    <template v-if="isAuthenticated" #price>
-                        <div class="shop-card-price-row product-price-row">
+
+                        <div v-if="isAuthenticated" class="product-price-row">
                             <Skeleton v-if="product._priceLoading" width="90px" height="18px" />
                             <template v-else-if="formatPrice(product.price)">
-                                <span class="shop-card-price product-price">฿{{ formatPrice(product.price) }}</span>
-                                <span class="shop-card-unit product-price-unit">/ {{ isSalePremiumProduct(product) ? 'ชุด' : product.price_unit_code || getProductSaleUnit(product) }}</span>
+                                <span class="product-price">฿{{ formatPrice(product.price) }}</span>
+                                <span class="product-price-unit">/ {{ product.price_unit_code || getProductSaleUnit(product) }}</span>
                             </template>
                             <span v-else-if="product._priceError" class="product-price-muted">{{ t('catalog.priceNotFound') }}</span>
                             <span v-else class="product-price-muted">{{ t('catalog.waitingPrice') }}</span>
+                            <img v-if="product.is_return === '1'" :src="returnIcon" :alt="t('productDetail.returnAlt')" class="product-return-icon" />
                         </div>
-                    </template>
-                </ProductCard>
+                        <div v-if="isAuthenticated && quantitiesInCart.has(product.item_code)"
+                            :id="'catalog-qty-' + encodeURIComponent(product.item_code)" class="product-cart-quantity">
+                            <i class="pi pi-shopping-cart" aria-hidden="true"></i>
+                            <span><span class="sr-only">{{ t('productDetail.inCart') }} </span>{{ quantitiesInCart.get(product.item_code) }}</span>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- สถานะว่าง (ไม่พบสินค้า) -->
             <div v-else-if="!loadingProducts && !initialLoading && products && products.length === 0" class="flex justify-center p-8">
-                <div class="empty-state-box rounded-lg p-6 w-full max-w-md">
+                <div ref="emptyResult" class="empty-state-box rounded-lg p-6 w-full max-w-md">
                     <div class="flex flex-col items-center text-center">
                         <i class="pi pi-search text-5xl text-gray-300 dark:text-gray-600 mb-4"></i>
                         <h3 class="text-xl font-medium mb-2">{{ t('catalog.emptyTitle') }}</h3>
@@ -945,6 +935,7 @@ function handleFavoriteChanged(data) {
         />
 
         <!-- Product Set Detail Dialog -->
+        <SalePremiumDetailDialog v-model:visible="showSalePremiumDetail" :sale-premium-code="selectedSalePremiumCode" />
         <ProductSetDialog
             :visible="showProductSetDetail"
             :item-code="selectedProductCode"
@@ -961,19 +952,12 @@ function handleFavoriteChanged(data) {
             @added-to-cart="handleAddedToCart"
             @favorite-changed="handleFavoriteChanged"
         />
-
-        <SalePremiumDetailDialog
-            :visible="showSalePremiumDetail"
-            :sale-premium-code="selectedSalePremiumCode"
-            @update:visible="showSalePremiumDetail = $event"
-            @added-to-cart="handleAddedToCart"
-        />
     </div>
 </template>
 
 <style scoped>
 .product-list-shell {
-    --product-search-sticky-top: var(--app-header-total-h);
+    --product-search-sticky-top: var(--market-header-height, 4rem);
     border-radius: var(--catalog-radius-lg, 0.9rem);
     background: var(--catalog-surface, #ffffff);
     animation: listFadeIn 300ms ease;
@@ -990,44 +974,21 @@ function handleFavoriteChanged(data) {
     border-top: none;
     border-left: none;
     border-right: none;
-    /* พื้นขาวล้วน — เดิมผสมสีแถบหัวเข้ามา 8% ทำให้เป็นเขียวจางๆ ที่กลืนกับชิปจนอ่านไม่ออก */
-    background: #ffffff;
-    box-shadow: var(--shop-shadow-3);
+    background: color-mix(in srgb, var(--market-card-bg, #ffffff) 92%, var(--market-header-bg, #f7ebcf));
+    box-shadow: 0 10px 22px rgba(140, 111, 53, 0.16);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
 }
 
-
-
-/* ชิปแสดงคำค้นปัจจุบัน — มาแทนช่องค้นหาที่ย้ายขึ้นแถบหัวไปแล้ว */
-.active-search-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    max-width: 100%;
-    padding: 0.3rem 0.4rem 0.3rem 0.7rem;
-    border-radius: var(--shop-radius-pill);
-    background: var(--market-primary-soft);
-    border: 1px solid color-mix(in srgb, var(--market-primary) 28%, transparent);
-    color: var(--market-primary);
-    font-size: 0.85rem;
-    font-weight: 700;
+.search-strip.is-floating {
+    position: fixed;
+    top: var(--product-search-sticky-top);
+    z-index: 995;
+    border-radius: 0 0 var(--catalog-radius-lg, 0.9rem) var(--catalog-radius-lg, 0.9rem);
 }
 
-.active-search-chip span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.active-search-chip button {
+.search-strip-spacer {
     flex: 0 0 auto;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    padding: 0.15rem;
-    line-height: 1;
 }
 
 .search-strip-head {
@@ -1053,9 +1014,9 @@ function handleFavoriteChanged(data) {
 }
 
 .filter-chip {
-    border: 1px solid var(--shop-border);
+    border: 1px solid #efe1c4;
     background: #ffffff;
-    color: var(--market-text);
+    color: #5b4a27;
     border-radius: 999px;
     padding: 0.4rem 0.75rem;
     font-size: 0.78rem;
@@ -1069,10 +1030,9 @@ function handleFavoriteChanged(data) {
 }
 
 .filter-chip.active {
-    /* เดิม hardcode สีครีม #6f5c33 / #fbf0d9 ค้างจากธีมเก่า ไม่เปลี่ยนตามที่แอดมินตั้ง */
-    border-color: var(--market-primary);
-    color: color-mix(in srgb, var(--market-primary) 78%, #000000);
-    background: color-mix(in srgb, var(--market-primary) 12%, #ffffff);
+    border-color: #d6b36a;
+    color: #6f5c33;
+    background: #fbf0d9;
 }
 
 .filter-chip.favorite-chip.active {
@@ -1091,7 +1051,7 @@ function handleFavoriteChanged(data) {
     margin: 0;
     font-size: 0.98rem;
     font-weight: 700;
-    color: var(--market-text);
+    color: #5b4a27;
     max-width: min(42rem, 58vw);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1101,7 +1061,7 @@ function handleFavoriteChanged(data) {
 .search-subtitle {
     margin: 0;
     font-size: 0.78rem;
-    color: var(--market-muted);
+    color: #9b8a67;
 }
 
 .search-pill {
@@ -1175,14 +1135,10 @@ function handleFavoriteChanged(data) {
     box-shadow: none;
 }
 
-/* 🚨 เดิมใช้ color: var(--market-header-text) ซึ่งเป็น "สีข้อความของแถบหัว" = ขาว
- *    พอเอามาใช้บนชิปพื้นอ่อน กลายเป็นขาวบนขาว มองไม่เห็นตัวหนังสือเลย
- *    (สมัยธีมครีม ค่านี้เป็นน้ำตาลเข้มจึงบังเอิญอ่านออก พอ P3 เปลี่ยนหัวเป็นเขียวทึบก็พังทันที)
- *    บทเรียนเดียวกับชื่อร้านบนแถบหัว — โทเคนของแถบหัวห้ามเอามาใช้บนพื้นผิวสีอ่อน */
 .compact-category-chip {
-    border: 1px solid var(--shop-border);
-    background: #ffffff;
-    color: var(--market-text);
+    border: 1px solid color-mix(in srgb, var(--market-card-border, #efe1c4) 80%, var(--market-primary, #0f9f6e));
+    background: color-mix(in srgb, var(--market-card-bg, #ffffff) 94%, var(--market-header-bg, #f7ebcf));
+    color: var(--market-header-text, #5b4a27);
     border-radius: 999px;
     padding: 0.42rem 0.8rem;
     font-size: 0.78rem;
@@ -1208,10 +1164,8 @@ function handleFavoriteChanged(data) {
 }
 
 .compact-category-chip.active {
-    /* ผสมดำ 18% ลงในสีหลัก — ขาวบน #0F9F6E ตรงๆ ได้ contrast แค่ 3.38 (เกณฑ์ 4.5)
-       ผสมแล้วเข้มพอให้ตัวอักษรขาวอ่านออกจริง โดยยังเป็นสีแบรนด์เดียวกัน */
-    border-color: color-mix(in srgb, var(--market-primary, #0f9f6e) 82%, #000000);
-    background: color-mix(in srgb, var(--market-primary, #0f9f6e) 82%, #000000);
+    border-color: var(--market-primary, #0f9f6e);
+    background: var(--market-primary, #0f9f6e);
     color: #ffffff;
 }
 
@@ -1233,6 +1187,10 @@ function handleFavoriteChanged(data) {
     position: relative;
 }
 
+.product-status-badges {
+    z-index: 2;
+}
+
 :deep(.inventory-tag.p-tag),
 :deep(.promotion-tag.p-tag) {
     font-size: 0.63rem !important;
@@ -1241,12 +1199,6 @@ function handleFavoriteChanged(data) {
     border: 1px solid transparent !important;
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
     backdrop-filter: blur(1px);
-}
-
-:deep(.sale-premium-tag.p-tag) {
-    background: #fce7f3 !important;
-    color: #be185d !important;
-    border-color: #f9a8d4 !important;
 }
 
 :deep(.inventory-tag.is-in.p-tag) {
@@ -1273,9 +1225,15 @@ function handleFavoriteChanged(data) {
     border-color: #fcd34d !important;
 }
 
-/* พื้น/ขอบ/เงา/hover มาจาก .shop-card (assets/shop-card.scss) แล้ว
-   ที่นี่เหลือเฉพาะสิ่งที่เป็นของกริดหน้านี้จริงๆ */
 .catalog-card {
+    border: 1px solid var(--market-card-border, #efe1c4);
+    border-radius: 0.9rem;
+    overflow: hidden;
+    background: var(--market-card-bg, #ffffff);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
     min-height: 100%;
     animation: cardStaggerIn 260ms ease both;
 }
@@ -1294,7 +1252,7 @@ function handleFavoriteChanged(data) {
 
 .catalog-card:hover {
     transform: translateY(-2px);
-    box-shadow: var(--shop-shadow-2);
+    box-shadow: 0 6px 12px rgba(140, 111, 53, 0.16);
 }
 
 @keyframes cardStaggerIn {
@@ -1312,42 +1270,66 @@ function handleFavoriteChanged(data) {
     pointer-events: none;
 }
 
-/* พื้นหลังกล่องรูป/เนื้อหา — ต้องใช้ :deep เพราะ markup อยู่ใน ProductCard แล้ว */
-.catalog-card :deep(.shop-card-media) {
-    background: var(--market-product-image-bg, var(--shop-surface));
+.product-image-wrap {
+    background: linear-gradient(180deg, #f8fafc, #ffffff);
 }
 
-.catalog-card :deep(.shop-card-body) {
+.product-content-wrap {
     background: var(--market-card-bg, #ffffff);
 }
 
-
-
-
-
-/* วางทับมุมล่างซ้ายของรูป ไม่กินพื้นที่ในแถวราคาอีกต่อไป */
-.product-return-icon {
-    position: absolute;
-    left: 0.4rem;
-    bottom: 0.4rem;
-    z-index: 2;
-    width: 2.2rem;
-    height: 2.2rem;
-    object-fit: contain;
+.product-name {
+    color: #5b4a27;
+    line-height: 1.4;
+    font-size: 0.97rem;
 }
 
+.product-price-row {
+    min-height: 24px;
+    display: flex;
+    align-items: baseline;
+    gap: 0.25rem;
+    margin-top: 0.35rem;
+}
 
+.product-cart-quantity {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    margin-top: .35rem;
+    color: var(--market-primary, #167458);
+    font-size: .85rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.product-cart-quantity i { font-size: .9em; }
+
+.product-return-icon {
+    width: 3.8rem;
+    height: 3.8rem;
+    object-fit: contain;
+    flex: 0 0 auto;
+    align-self: center;
+    margin-left: auto;
+}
+
+.product-price {
+    color: var(--market-primary, #0f9f6e);
+    font-weight: 800;
+    font-size: 1rem;
+}
 
 .product-price-unit,
 .product-price-muted {
-    color: var(--market-muted);
+    color: #8a7658;
     font-size: 0.78rem;
 }
 
 .empty-state-box {
     border: 1px solid var(--market-card-border, #efe1c4);
     background: var(--market-card-bg, #ffffff);
-    box-shadow: var(--shop-shadow-2);
+    box-shadow: 0 4px 10px rgba(140, 111, 53, 0.1);
 }
 
 /* สไตล์สำหรับ spinner การค้นหา */
@@ -1387,8 +1369,7 @@ function handleFavoriteChanged(data) {
 
 .back-to-top-btn {
     position: fixed;
-    /* ยกให้พ้นแถบเมนูล่างบนมือถือ (บนเดสก์ท็อป --app-bottomnav-h = 0 จึงกลับเป็น 20px เท่าเดิม) */
-    bottom: calc(var(--app-bottomnav-h) + var(--app-safe-bottom) + 20px);
+    bottom: 20px;
     right: 20px;
     z-index: 99;
     border-radius: 50%;
@@ -1414,6 +1395,7 @@ function handleFavoriteChanged(data) {
 
 @media (max-width: 768px) {
     .product-list-shell {
+        --product-search-sticky-top: 7.45rem;
         border-radius: 0;
     }
 
@@ -1496,11 +1478,16 @@ function handleFavoriteChanged(data) {
     .back-to-top-btn {
         width: 2.8rem;
         height: 2.8rem;
+        bottom: 18px;
         right: 18px;
     }
 }
 
 @media (max-width: 480px) {
+    .product-list-shell {
+        --product-search-sticky-top: 7.35rem;
+    }
+
     .search-strip {
         margin: 0;
         padding: 0.58rem 0.55rem;
@@ -1520,6 +1507,102 @@ function handleFavoriteChanged(data) {
     }
 }
 
+.mobile-filter-trigger {
+    display: none;
+}
+
+@media (max-width: 900px) {
+    .product-list-shell {
+        --product-search-sticky-top: var(--market-header-height, 4rem);
+    }
+
+    .search-strip {
+        padding: .5rem .65rem;
+        background: var(--market-card-bg, white);
+        box-shadow: 0 3px 10px rgb(60 49 26 / 7%);
+    }
+
+    .search-strip.is-floating {
+        inset-inline: 0;
+        border-radius: 0;
+    }
+
+    .search-strip-head, .compact-category-arrow { display: none; }
+    .catalog-search-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: stretch;
+        gap: .45rem;
+    }
+
+    .modern-search-input { height: 44px; border-radius: .7rem; padding-inline-end: 2.5rem; }
+    .mobile-filter-trigger {
+        display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+        min-height: 44px; padding-inline: .75rem; border-radius: .7rem;
+        border: 1px solid var(--market-card-border, #dfd7c6);
+        color: var(--market-header-text, #55432b); background: var(--market-card-bg, #fff);
+        font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .mobile-filter-trigger.active {
+        border-color: var(--market-primary, #0f9f6e);
+        color: var(--market-primary, #0f9f6e);
+    }
+
+    .compact-category-scroller { margin-top: .35rem; }
+    .compact-category-row { gap: .4rem; padding-block: 2px; }
+    .compact-category-chip { min-height: 32px; padding-inline: .8rem; }
+    .back-to-top-btn { bottom: calc(var(--market-mobile-nav-height, 64px) + env(safe-area-inset-bottom) + 8px); }
+}
+
+:global(.p-dialog.catalog-filter-sheet) {
+    width: min(100%, 36rem); max-width: 100%; max-height: 90dvh; margin: 0;
+    border-radius: 1.25rem 1.25rem 0 0;
+    padding: .5rem .2rem env(safe-area-inset-bottom);
+    background: var(--market-card-bg, #fff); overflow: auto;
+}
+:global(.catalog-filter-sheet::before) {
+    content: ''; flex: none; width: 2.75rem; height: 4px; align-self: center;
+    background: #c7c9cf; border-radius: 4px;
+}
+:global(.catalog-filter-sheet .p-button.catalog-filter-close) {
+    color: #56616a;
+    background: transparent;
+    border-color: transparent;
+}
+:global(.catalog-filter-sheet .catalog-filter-close:hover) { background: #f1f3f4; }
+:global(.catalog-filter-sheet .catalog-filter-close:focus-visible) { outline: 2px solid #56616a; outline-offset: 2px; }
+.mobile-discovery { display:grid; gap:.65rem; padding:.4rem; }
+.mobile-discovery > * { min-width:0; }
+.mobile-category-strip { padding: .4rem; }
+.mobile-discovery:empty { display: none; }
+/* Short categories also need enough scroll range to place their first row below the toolbar. */
+.aligned-mobile-results { min-height: calc(100dvh - var(--product-search-sticky-top)); }
+.aligned-mobile-results .catalog-card { animation: none; }
+.browse-categories,.results-heading { font-weight:700; color:var(--market-text); padding:.55rem; }
+.browse-categories { background:none; border:0; cursor:pointer; }
+.catalog-search-toolbar:has(.category-trigger) { grid-template-columns:minmax(0,1fr) auto auto; }
+.category-trigger span { max-width:24vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+:global(.p-dialog.catalog-category-sheet) { overflow:hidden; max-height:78dvh; color:var(--market-text); }
+@media (max-width: 900px) {
+    :global(.p-dialog-mask.p-dialog-bottom .p-dialog.catalog-category-sheet) {
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+    }
+}
+:global(.catalog-category-sheet .p-dialog-content) { overflow-y:auto; overscroll-behavior:contain; min-height:0; background:var(--market-card-bg); }
+:global(.catalog-category-sheet .p-dialog-header) { flex:none; color:var(--market-text); background:var(--market-card-bg); }
+.filter-sheet-options label {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    min-height: 52px; border-top: 1px solid #e8e8e3; cursor: pointer;
+}
+.filter-sheet-actions { display: flex; width: 100%; align-items: center; gap: .8rem; }
+.filter-sheet-actions button { flex: 1; min-height: 44px; }
+.sheet-clear {
+    background: transparent; border: 0; font: inherit; font-weight: 600; text-decoration: underline;
+    text-underline-offset: .2em; color: var(--market-primary, #15815c); cursor: pointer;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .product-list-shell,
     .catalog-card,
@@ -1533,4 +1616,8 @@ function handleFavoriteChanged(data) {
         transform: none !important;
     }
 }
+@media (max-width: 900px) {
+    main > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.product-list-shell { --product-search-sticky-top: var(--app-topbar-h); }
 </style>

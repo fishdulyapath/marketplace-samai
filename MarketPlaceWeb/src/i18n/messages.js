@@ -10,6 +10,8 @@ export const messages = {
     th: {
         language: { label: 'ภาษา', select: 'เลือกภาษา' },
         nav: {
+            accountShort: "ของฉัน",
+            cartShort: "ตะกร้า",
             home: 'หน้าแรก',
             marketplace: 'สินค้าทั้งหมด',
             catalog: 'รายการสินค้า',
@@ -29,6 +31,7 @@ export const messages = {
             advancePaymentHistory: 'ประวัติการรับเงินล่วงหน้า'
         },
         auth: {
+            selectedCustomerLabel: "ลูกค้าที่เลือก",
             customerLogin: 'เข้าสู่ระบบ',
             employeeLogin: 'เข้าสู่ระบบพนักงาน',
             selectedCustomer: 'ลูกค้าที่เลือก: {name}',
@@ -293,6 +296,16 @@ export const messages = {
             checkout: 'สั่งซื้อ'
         },
         catalog: {
+            freeGift: 'ของแถม',
+            browseCategories: "หมวดหมู่",
+            chooseCategory: "เลือกหมวดหมู่",
+            filterButton: "กรอง",
+            filterTitle: "ตัวกรอง",
+            showProducts: "แสดงสินค้า",
+            promoAtQuantity: "ราคาโปรเมื่อซื้อ {qty} {unit}",
+            promoPercent: "ลด {value}%",
+            promoDiscount: "มีส่วนลด",
+            promoDiscountAtQuantity: "{discount} เมื่อซื้อ {qty} {unit}",
             favorites: 'รายการโปรด',
             favoritesSubtitle: 'สินค้าที่คุณกดหัวใจไว้',
             backToCatalog: 'กลับไปหน้ารายการสินค้า',
@@ -318,6 +331,7 @@ export const messages = {
             backToTop: 'กลับขึ้นด้านบน'
         },
         landing: {
+            viewAllPromotions: "ดูโปรโมชั่นทั้งหมด",
             heroSubtitle: 'เลือกสินค้า ตรวจราคา เพิ่มลงตะกร้า และส่งคำสั่งซื้อได้สะดวกผ่านหน้าร้านออนไลน์',
             viewProducts: 'ดูสินค้า',
             goToProducts: 'ไปหน้าสินค้า',
@@ -827,6 +841,8 @@ export const messages = {
     en: {
         language: { label: 'Language', select: 'Select language' },
         nav: {
+            accountShort: "My space",
+            cartShort: "Cart",
             home: 'Home',
             marketplace: 'All Products',
             catalog: 'Product List',
@@ -846,6 +862,7 @@ export const messages = {
             advancePaymentHistory: 'Advance Payment History'
         },
         auth: {
+            selectedCustomerLabel: "Selected customer",
             customerLogin: 'Customer sign-in',
             employeeLogin: 'Employee sign-in',
             selectedCustomer: 'Selected customer: {name}',
@@ -1110,6 +1127,16 @@ export const messages = {
             checkout: 'Checkout'
         },
         catalog: {
+            freeGift: 'Free gift',
+            browseCategories: "Categories",
+            chooseCategory: "Choose category",
+            filterButton: "Filter",
+            filterTitle: "Filters",
+            showProducts: "Show products",
+            promoAtQuantity: "Promo price at {qty} {unit}",
+            promoPercent: "{value}% off",
+            promoDiscount: "Discount available",
+            promoDiscountAtQuantity: "{discount} at {qty} {unit}",
             favorites: 'Favorites',
             favoritesSubtitle: 'Products you marked with a heart',
             backToCatalog: 'Back to all products',
@@ -1135,6 +1162,7 @@ export const messages = {
             backToTop: 'Back to top'
         },
         landing: {
+            viewAllPromotions: "View all promotions",
             heroSubtitle: 'Choose products, check prices, add to cart, and submit orders easily online.',
             viewProducts: 'View Products',
             goToProducts: 'Go to Products',
@@ -1643,6 +1671,8 @@ export const messages = {
     lo: {
         language: { label: 'ພາສາ', select: 'ເລືອກພາສາ' },
         nav: {
+            accountShort: "ຂອງຂ້ອຍ",
+            cartShort: "ກະຕ່າ",
             home: 'ໜ້າຫຼັກ',
             marketplace: 'ສິນຄ້າທັງໝົດ',
             catalog: 'ລາຍການສິນຄ້າ',
@@ -1662,6 +1692,7 @@ export const messages = {
             advancePaymentHistory: 'ປະຫວັດການຮັບເງິນລ່ວງໜ້າ'
         },
         auth: {
+            selectedCustomerLabel: "ລູກຄ້າທີ່ເລືອກ",
             customerLogin: 'ເຂົ້າລະບົບລູກຄ້າ',
             employeeLogin: 'ເຂົ້າລະບົບພະນັກງານ',
             selectedCustomer: 'ລູກຄ້າທີ່ເລືອກ: {name}',
@@ -1926,6 +1957,16 @@ export const messages = {
             checkout: 'ສັ່ງຊື້'
         },
         catalog: {
+            freeGift: 'ຂອງແຖມ',
+            browseCategories: "ໝວດໝູ່",
+            chooseCategory: "ເລືອກໝວດໝູ່",
+            filterButton: "ກອງ",
+            filterTitle: "ຕົວກອງ",
+            showProducts: "ສະແດງສິນຄ້າ",
+            promoAtQuantity: "ລາຄາໂປຣເມື່ອຊື້ {qty} {unit}",
+            promoPercent: "ຫຼຸດ {value}%",
+            promoDiscount: "ມີສ່ວນຫຼຸດ",
+            promoDiscountAtQuantity: "{discount} ເມື່ອຊື້ {qty} {unit}",
             favorites: 'ລາຍການທີ່ມັກ',
             favoritesSubtitle: 'ສິນຄ້າທີ່ທ່ານກົດຫົວໃຈໄວ້',
             backToCatalog: 'ກັບໄປໜ້າລາຍການສິນຄ້າ',
@@ -1951,6 +1992,7 @@ export const messages = {
             backToTop: 'ກັບຂຶ້ນດ້ານເທິງ'
         },
         landing: {
+            viewAllPromotions: "ເບິ່ງໂປຣໂມຊັນທັງໝົດ",
             heroSubtitle: 'ເລືອກສິນຄ້າ ກວດລາຄາ ເພີ່ມລົງກະຕ່າ ແລະສົ່ງຄໍາສັ່ງຊື້ໄດ້ສະດວກຜ່ານຮ້ານອອນລາຍ',
             viewProducts: 'ເບິ່ງສິນຄ້າ',
             goToProducts: 'ໄປໜ້າສິນຄ້າ',

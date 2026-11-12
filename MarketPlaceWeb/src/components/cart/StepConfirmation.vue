@@ -2890,7 +2890,7 @@ function isExpanded(itemCode) {
 .confirmation-actions {
     gap: 0.75rem;
     position: sticky;
-    bottom: 0.75rem;
+    bottom: calc(var(--app-bottomnav-h) + var(--app-safe-bottom) + 0.75rem);
     z-index: 8;
     padding: 0.75rem;
     border: 1px solid var(--market-card-border, #efe3c8);

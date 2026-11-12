@@ -1,25 +1,61 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onActivated, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { onBeforeRouteLeave, useRouter, useRoute } from 'vue-router';
+import { useToast } from 'primevue/usetoast';
 
+import SalePremiumProducts from '@/components/catalog/SalePremiumProducts.vue';
 import CategorySelection from '@/components/catalog/CategorySelection.vue';
 import PromotionProducts from '@/components/catalog/PromotionProducts.vue';
-import SalePremiumProducts from '@/components/catalog/SalePremiumProducts.vue';
 import ProductList from '@/components/catalog/ProductList.vue';
 import RecommendedProducts from '@/components/catalog/RecommendedProducts.vue';
+import { useAuthenStore } from '@/stores/authen';
 import CategoryService from '@/services/CategoryService';
 import { useLanguageStore } from '@/stores/languageStore';
 import { pickMasterName } from '@/utils/languageDisplay';
 
+const mobileQuery = window.matchMedia('(max-width: 900px)');
+const mobile = ref(mobileQuery.matches);
+const onLayoutChange = event => { mobile.value = event.matches; };
+onMounted(() => mobileQuery.addEventListener('change', onLayoutChange));
+onBeforeUnmount(() => mobileQuery.removeEventListener('change', onLayoutChange));
 const route = useRoute();
+const router = useRouter();
+const auth = useAuthenStore();
+let catalogScroll = null;
+onBeforeRouteLeave(to => {
+    if (to.name === 'cart') catalogScroll = { y: window.scrollY, customer: auth.userCode };
+});
+onActivated(async () => {
+    if (catalogScroll === null) return;
+    const saved = catalogScroll;
+    catalogScroll = null;
+    await nextTick();
+    // Restore after the sticky toolbar has measured the reactivated catalog.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (route.name === 'catalog' && saved.customer === auth.userCode) {
+            window.scrollTo({ top: saved.y, behavior: 'instant' });
+        }
+    }));
+});
 const languageStore = useLanguageStore();
+const toast = useToast();
+const categoriesLoading = ref(true);
 const selectedCategory = ref(getRouteCategory());
 const categoryOptions = ref([]);
-const specialCategoryCodes = new Set(['all', 'promotions', 'productset']);
-const hasSearchQuery = computed(() => {
-    const query = Array.isArray(route.query.q) ? route.query.q[0] : route.query.q;
-    return typeof query === 'string' && query.trim().length > 0;
+const catalogProducts = ref(null);
+const viewingPromoResults = computed(() => route.hash === '#catalog-products' && selectedCategory.value === 'promotions');
+const showMobileShelves = computed(() => mobile.value && !viewingPromoResults.value);
+const recommendationsReady = ref(false);
+const promotionsReady = ref(false);
+const giftsReady = ref(false);
+watch(showMobileShelves, visible => {
+    if (!visible) {
+        recommendationsReady.value = false;
+        promotionsReady.value = false;
+        giftsReady.value = false;
+    }
 });
+const specialCategoryCodes = new Set(['all', 'promotions', 'productset']);
 const selectedCategoryName = computed(() => {
     if (route.query.favorite === '1') return '';
     if (specialCategoryCodes.has(selectedCategory.value)) return '';
@@ -34,6 +70,11 @@ function getRouteCategory() {
 
 function handleSelectCategory(categoryCode) {
     selectedCategory.value = categoryCode;
+    const query = { ...route.query };
+    delete query.promo;
+    if (categoryCode === 'all') delete query.category;
+    else query.category = categoryCode;
+    router.replace({ path: route.path, query, hash: categoryCode === 'promotions' ? '#catalog-products' : '' });
 }
 
 async function loadCategoryOptions() {
@@ -41,88 +82,72 @@ async function loadCategoryOptions() {
         const response = await CategoryService.getCategories();
         categoryOptions.value = response?.data || [];
     } catch (error) {
-        console.error('Error loading category names:', error);
+        toast.add({ severity: 'error', summary: languageStore.t('common.error'), detail: languageStore.t('errors.loadCategories'), life: 5000 });
+    } finally {
+        categoriesLoading.value = false;
     }
 }
 
 onMounted(() => {
     loadCategoryOptions();
+    if (viewingPromoResults.value) nextTick(() => catalogProducts.value?.scrollIntoView({ block: 'start' }));
 });
 
 watch(
-    () => [route.query.category, route.query.promo, languageStore.locale],
+    [() => route.query.category, () => route.query.promo],
     () => {
-        selectedCategory.value = getRouteCategory();
+        if (route.name === 'catalog') selectedCategory.value = getRouteCategory();
     }
 );
 </script>
 
 <template>
     <div class="catalog-page min-h-screen">
-        <!-- ไม่มี <section> ห่อแต่ละกล่องแล้ว — ให้ component เป็นลูกตรงของ flex canvas
-             เพราะกล่องที่ไม่มีสินค้าจะไม่ render root ของตัวเอง ถ้ายังมี wrapper ครอบอยู่
-             จะเหลือ margin/gap ค้างเป็นช่องว่างลอย (Toast กลางอยู่ที่ AppLayout แล้ว) -->
+        <Toast />
         <div class="catalog-canvas">
-            <CategorySelection v-if="!hasSearchQuery" :selectedCategory="selectedCategory" @select-category="handleSelectCategory" />
 
-            <RecommendedProducts v-if="!hasSearchQuery" />
+            <section v-if="!mobile" class="catalog-categories">
+                <CategorySelection :categories="categoryOptions" :loading="categoriesLoading" :selectedCategory="selectedCategory" @select-category="handleSelectCategory" />
+            </section>
+            <div v-if="!mobile && !viewingPromoResults" class="catalog-shelves">
+                <RecommendedProducts :key="auth.userCode" />
+                <PromotionProducts />
+                <SalePremiumProducts :key="'gift-' + auth.userCode" @ready="giftsReady = true" />
+            </div>
 
-            <PromotionProducts v-if="!hasSearchQuery" />
-
-            <SalePremiumProducts v-if="!hasSearchQuery" />
-
-            <ProductList :selectedCategory="selectedCategory" :selected-category-name="selectedCategoryName" :categories="categoryOptions" @select-category="handleSelectCategory" />
+            <section id="catalog-products" ref="catalogProducts" class="catalog-products">
+                <ProductList :mobile="mobile" :selectedCategory="selectedCategory" :selected-category-name="selectedCategoryName" :categories="categoryOptions" :discovery-ready="!showMobileShelves || (recommendationsReady && promotionsReady && giftsReady)" @select-category="handleSelectCategory">
+                    <template v-if="showMobileShelves" #discovery>
+                        <RecommendedProducts :key="auth.userCode" @ready="recommendationsReady = true" />
+                        <PromotionProducts @ready="promotionsReady = true" />
+                        <SalePremiumProducts :key="'gift-' + auth.userCode" @ready="giftsReady = true" />
+                    </template>
+                </ProductList>
+            </section>
         </div>
     </div>
 </template>
 
 <style scoped>
-/* ตัวแปร --catalog-* เดิมฝังโทนครีม-ทองไว้ตายตัว (#fffefb / #d6b36a / #5b4a27)
-   ทำให้เปลี่ยนธีมในหน้าแอดมินแล้วหน้าแคตตาล็อกไม่เปลี่ยนตาม — ตอนนี้ map เข้าโทเคนกลางหมด */
 .catalog-page {
-    --catalog-bg: var(--shop-page-bg);
-    --catalog-surface: var(--shop-surface);
-    --catalog-surface-soft: var(--shop-surface-sunken);
-    --catalog-border: var(--shop-border);
-    --catalog-shadow: var(--shop-shadow-2);
-    --catalog-shadow-soft: var(--shop-shadow-1);
-    --catalog-text: var(--market-text);
-    --catalog-text-muted: var(--market-muted);
-    --catalog-primary: var(--market-primary);
+    overflow-anchor: none;
+    --catalog-surface: var(--market-card-bg, #ffffff);
+    --catalog-surface-soft: #fdf7ea;
+    --catalog-border: var(--market-card-border, #efe3c8);
+    --catalog-shadow: 0 4px 12px rgba(140, 111, 53, 0.1);
+    --catalog-shadow-soft: 0 3px 8px rgba(140, 111, 53, 0.07);
+    --catalog-text: #5b4a27;
+    --catalog-text-muted: #9b8a67;
+    --catalog-primary: var(--market-primary, #d6b36a);
     --catalog-radius-lg: 0.9rem;
     --catalog-radius-md: 0.75rem;
-    --catalog-gap: clamp(0.5rem, 1.5vw, 0.9rem);
-    /* พื้นหลังเรียบแทน gradient 3 สต็อป — สไตล์แอปช้อปปิ้งใช้พื้นเทาอ่อนตัวเดียวให้การ์ดขาวเด่น */
-    background: var(--shop-page-bg);
-    /* clamp แทน media query 3 ชั้น (1024/768/480): ระยะขอบไล่ต่อเนื่องตามความกว้างจริง
-       ไม่กระโดดที่เส้นแบ่ง และไม่มีช่วงจอที่ตกไปใช้ค่าของอีกชั้นโดยไม่ตั้งใจ */
-    padding: clamp(0.35rem, 1.1vw, 1rem) clamp(0.35rem, 0.9vw, 0.875rem) clamp(0.6rem, 1.3vw, 1.25rem);
+    --catalog-gap: 0.75rem;
+    padding: 1rem 0.875rem 1.25rem;
 }
 
 .catalog-canvas {
     width: min(1280px, 100%);
     margin: 0 auto;
-    /* flex + gap แทน margin-top ของ wrapper แต่ละกล่อง:
-       กล่องที่ซ่อนตัวเองจะหลุดจาก flow ทั้งหมด gap จึงหายตามไปด้วย ไม่เหลือช่องว่างค้าง */
-    display: flex;
-    flex-direction: column;
-    gap: var(--catalog-gap);
-}
-
-/* fade ด้วย opacity อย่างเดียว ห้ามใช้ transform:
-   ProductList มีแถบค้นหา position:sticky อยู่ข้างใน ถ้า ancestor มี transform
-   จะกลายเป็น containing block ทำให้ sticky offset เพี้ยนตามระยะ translate */
-.catalog-canvas > * {
-    animation: fadeIn 280ms ease;
-}
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
 }
 
 .catalog-intro {
@@ -136,7 +161,7 @@ watch(
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--market-primary);
+    color: #d6b36a;
 }
 
 .intro-title {
@@ -150,6 +175,30 @@ watch(
     margin: 0;
     color: var(--catalog-text-muted);
     font-size: 0.9rem;
+}
+
+.catalog-products {
+    border-radius: var(--catalog-radius-lg);
+    background: transparent;
+    animation: fadeSlideIn 320ms ease;
+}
+
+.catalog-shelves {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.2rem;
+}
+.catalog-shelves:not(:empty) {
+    margin-top: var(--catalog-gap);
+}
+
+.catalog-products {
+    margin-top: var(--catalog-gap);
+    scroll-margin-top: 7.2rem;
+}
+
+@media (min-width: 901px) {
+    .catalog-products { scroll-margin-top: var(--market-header-height, 4rem); }
 }
 
 @keyframes fadeSlideIn {
@@ -169,13 +218,39 @@ watch(
     }
 }
 
+@media (max-width: 900px) {
+    .catalog-canvas {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .catalog-products {
+        order: -1;
+        margin-top: 0;
+        min-width: 0;
+    }
+
+    /* The mobile search toolbar already includes the category selector. */
+    .catalog-categories {
+        display: none;
+    }
+}
+
 @media (max-width: 768px) {
+    .catalog-page {
+        padding: 0.45rem 0.45rem 0.8rem;
+    }
+
     .intro-title {
         font-size: 1.22rem;
     }
 }
 
 @media (max-width: 480px) {
+    .catalog-page {
+        padding: 0.35rem 0.35rem 0.6rem;
+    }
+
     .intro-subtitle {
         font-size: 0.82rem;
     }
@@ -183,7 +258,7 @@ watch(
 
 @media (prefers-reduced-motion: reduce) {
     .catalog-intro,
-    .catalog-canvas > * {
+    .catalog-products {
         animation: none !important;
     }
 }

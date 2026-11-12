@@ -132,7 +132,12 @@ onMounted(async () => {
                      → สินค้าโหลดใหม่หมด ราคาที่โหลดแล้วหาย timer auto-refresh รีเซ็ต
                      หน้าที่อ่าน query ในนี้ (Catalog, ProductList) มี watch รับการเปลี่ยนอยู่แล้ว
                      ส่วน /auth/login อยู่นอก AppLayout จึงไม่ได้รับผลจาก key ตัวนี้ -->
-                <router-view :key="$route.path" />
+                <router-view v-slot="{ Component, route }">
+                    <KeepAlive v-if="['cart', 'catalog'].includes(route.name)" include="Catalog" :max="1">
+                        <component :is="Component" :key="route.path" />
+                    </KeepAlive>
+                    <component v-else :is="Component" :key="route.path" />
+                </router-view>
             </div>
 
             <!-- ส่วนท้ายของแอป -->

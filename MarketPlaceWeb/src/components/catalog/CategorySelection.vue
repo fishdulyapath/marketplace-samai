@@ -1,13 +1,13 @@
 <script setup>
-import CategoryService from '@/services/CategoryService';
-import MediaService from '@/services/MediaService';
+import { resolveCategoryImage } from '@/utils/categoryImage';
 import { useLanguageStore } from '@/stores/languageStore';
 import { pickMasterName } from '@/utils/languageDisplay';
 import Skeleton from 'primevue/skeleton';
-import { useToast } from 'primevue/usetoast';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = defineProps({
+    categories: { type: Array, required: true },
+    loading: { type: Boolean, default: false },
     selectedCategory: {
         type: String,
         default: 'all'
@@ -16,74 +16,75 @@ const props = defineProps({
 
 const emit = defineEmits(['select-category']);
 
-const categories = ref([]);
-const loading = ref(true);
-const toast = useToast();
 const languageStore = useLanguageStore();
 const t = (key, params) => languageStore.t(key, params);
 
-// เดิมมี 2 ชุดแยกกัน (เดสก์ท็อปวงกลม 2 แถว / มือถือเป็นชิปยาว) ทำให้ต้องแก้ทุกอย่าง 2 ที่
-// ตอนนี้เหลือชุดเดียว: วงกลมเลื่อนแนวนอน ใช้ทั้งสองขนาดจอ ต่างกันแค่ขนาดวงกลมที่ยืดด้วย clamp
-const trackRef = ref(null);
-const itemRefs = ref({});
+// Desktop scroll
+const desktopTrackRef = ref(null);
 const canScrollLeft = ref(false);
 const canScrollRight = ref(false);
 
-// หมวดที่รูปโหลดไม่สำเร็จ — เก็บเป็น state แทนการไปแก้ style ของ <img> ตรงๆ
-// (วิธีเดิมใช้ e.target.style.display='none' ซึ่งพอ Vue re-render จะคืนค่ากลับมาแล้วรูปพังโชว์อีก)
-const brokenImages = ref({});
+// Mobile scroll
+const mobileTrackRef = ref(null);
+const mobileChipRefs = ref({});
+const canMobileScrollLeft = ref(false);
+const canMobileScrollRight = ref(false);
 
-const palette = ['#ee4d2d', '#f57224', '#0db14b', '#1890ff', '#722ed1', '#eb2f96', '#faad14', '#13c2c2', '#52c41a', '#2f54eb', '#fa541c', '#a0d911'];
+// Palette fallback
+const palette = [
+    '#ee4d2d','#f57224','#0db14b','#1890ff',
+    '#722ed1','#eb2f96','#faad14','#13c2c2',
+    '#52c41a','#2f54eb','#fa541c','#a0d911',
+];
 
 const specialMap = {
-    all: { bg: '#fff0eb', color: '#ee4d2d' },
+    all:        { bg: '#fff0eb', color: '#ee4d2d' },
     promotions: { bg: '#fff0eb', color: '#ee4d2d' },
-    productset: { bg: '#e6f7ff', color: '#1890ff' }
+    productset: { bg: '#e6f7ff', color: '#1890ff' },
 };
 
 function getCatColor(cat, index) {
     if (specialMap[cat.code]) return specialMap[cat.code].color;
     return palette[(index ?? 0) % palette.length];
 }
-
 function getCatBg(cat, index) {
     if (specialMap[cat.code]) return specialMap[cat.code].bg;
-    return palette[(index ?? 0) % palette.length] + '18';
+    const color = palette[(index ?? 0) % palette.length];
+    return color + '18';
 }
 
-function updateScroll() {
-    const el = trackRef.value;
+// ── Desktop scroll ──
+function updateDesktopScroll() {
+    const el = desktopTrackRef.value;
     if (!el) return;
     canScrollLeft.value = el.scrollLeft > 4;
     canScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
 }
+function scrollDesktop(dir) {
+    desktopTrackRef.value?.scrollBy({ left: dir * 320, behavior: 'smooth' });
+}
 
-function scrollTrack(dir) {
-    const el = trackRef.value;
+// ── Mobile scroll ──
+function updateMobileScroll() {
+    const el = mobileTrackRef.value;
     if (!el) return;
-    el.scrollBy({ left: dir * Math.max(200, Math.floor(el.clientWidth * 0.7)), behavior: 'smooth' });
+    canMobileScrollLeft.value = el.scrollLeft > 4;
+    canMobileScrollRight.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
 }
-
-function setItemRef(el, code) {
-    if (el) itemRefs.value[code] = el;
+function scrollMobile(dir) {
+    mobileTrackRef.value?.scrollBy({ left: dir * 200, behavior: 'smooth' });
 }
-
+function setMobileChipRef(el, code) {
+    if (el) mobileChipRefs.value[code] = el;
+}
 function scrollToActive() {
-    const item = itemRefs.value[props.selectedCategory];
-    if (item && trackRef.value) {
-        item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    const chip = mobileChipRefs.value[props.selectedCategory];
+    if (chip && mobileTrackRef.value) {
+        chip.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
     }
 }
 
-function resolveCategoryImage(cat) {
-    if (brokenImages.value[cat?.code]) return '';
-    const url = String(cat?.imageUrl || cat?.image_url || '').trim();
-    return MediaService.resolveUrl(url);
-}
 
-function handleImageError(cat) {
-    brokenImages.value = { ...brokenImages.value, [cat.code]: true };
-}
 
 function getCategoryName(cat) {
     const specialCategoryKeys = {
@@ -94,33 +95,18 @@ function getCategoryName(cat) {
     return specialCategoryKeys[cat?.code] ? t(specialCategoryKeys[cat.code]) : pickMasterName(cat, languageStore.locale) || cat?.display_name || cat?.name || '';
 }
 
-// ไม่มีรูป → ใช้อักษรแรกของชื่อหมวดแทนวงกลมเปล่าที่ดูเหมือนรูปโหลดไม่ขึ้น
-// ถ้าชื่อขึ้นต้นด้วยตัวเลข/สัญลักษณ์ ให้ใช้ไอคอนป้ายแทน
-function getCategoryInitial(cat) {
-    const name = getCategoryName(cat).trim();
-    if (!name) return '';
-    const first = [...name][0];
-    return /[\p{L}]/u.test(first) ? first.toUpperCase() : '';
-}
-
 function handleResize() {
-    updateScroll();
+    updateDesktopScroll();
+    updateMobileScroll();
 }
 
-onMounted(async () => {
-    try {
-        const response = await CategoryService.getCategories();
-        categories.value = response.data;
-        loading.value = false;
-        nextTick(() => {
-            updateScroll();
-            scrollToActive();
-        });
-    } catch (error) {
-        console.error('Error loading categories:', error);
-        loading.value = false;
-        toast.add({ severity: 'error', summary: t('common.error'), detail: error.message || t('errors.loadCategories'), life: 5000 });
-    }
+watch(() => props.categories, () => {
+    handleResize();
+    scrollToActive();
+}, { flush: 'post' });
+
+onMounted(() => {
+    handleResize();
     window.addEventListener('resize', handleResize);
 });
 
@@ -128,10 +114,7 @@ onBeforeUnmount(() => {
     window.removeEventListener('resize', handleResize);
 });
 
-watch(
-    () => props.selectedCategory,
-    () => nextTick(() => scrollToActive())
-);
+watch(() => props.selectedCategory, () => nextTick(() => scrollToActive()));
 
 function selectCategory(code) {
     emit('select-category', code);
@@ -139,198 +122,355 @@ function selectCategory(code) {
 </script>
 
 <template>
-    <!-- RULE: hide-empty-section — หมวดหมู่โหลดครั้งเดียวใน onMounted จึงใช้ loading ได้ -->
-    <div v-if="loading || categories.length" class="cat-root">
-        <div v-if="loading" class="cat-track">
-            <div v-for="i in 10" :key="i" class="cat-item">
-                <Skeleton shape="circle" class="cat-skeleton-circle" />
-                <Skeleton width="52px" height="10px" class="mt-1" />
+    <div class="cat-root">
+
+        <!-- ══════════════════════════════════════════════════
+             DESKTOP — Shopee-style 2-row horizontal scroll
+        ══════════════════════════════════════════════════════ -->
+        <div class="cat-desktop hidden md:block">
+            <!-- Loading -->
+            <div v-if="loading" class="cat-d-track">
+                <div class="cat-d-inner">
+                    <div v-for="i in 10" :key="i" class="cat-d-item">
+                        <Skeleton shape="circle" size="64px" class="mb-2" />
+                        <Skeleton width="56px" height="11px" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scroll container -->
+            <div v-else class="cat-d-wrap">
+                <!-- Left arrow -->
+                <button v-if="canScrollLeft" type="button" class="cat-d-arrow cat-d-arrow--left" aria-label="เลื่อนหมวดหมู่ไปทางซ้าย" @click="scrollDesktop(-1)">
+                    <i class="pi pi-chevron-left"></i>
+                </button>
+
+                <div ref="desktopTrackRef" class="cat-d-track" @scroll="updateDesktopScroll">
+                    <!-- 2-row grid inside scrollable track -->
+                    <div class="cat-d-inner">
+                        <button
+                            v-for="(cat, i) in categories"
+                            :key="cat.code"
+                            type="button"
+                            :class="['cat-d-item', selectedCategory === cat.code ? 'cat-d-item--active' : '']"
+                            :aria-pressed="selectedCategory === cat.code"
+                            :aria-label="`${t('common.select')} ${getCategoryName(cat)}`"
+                            @click="selectCategory(cat.code)"
+                        >
+                            <!-- Circle -->
+                            <div
+                                class="cat-d-circle"
+                                :style="{ background: getCatBg(cat, i) }"
+                            >
+                                <i class="pi pi-th-large" aria-hidden="true"></i>
+                                <img
+                                    v-if="resolveCategoryImage(cat)"
+                                    :src="resolveCategoryImage(cat)"
+                                    :alt="getCategoryName(cat)"
+                                    class="cat-d-img"
+                                    @error="(e) => e.target.style.display = 'none'"
+                                />
+                            </div>
+                            <!-- Label -->
+                            <span
+                                class="cat-d-label"
+                                :style="selectedCategory === cat.code ? { color: getCatColor(cat, i) } : {}"
+                            >{{ getCategoryName(cat) }}</span>
+                            <!-- Active underline -->
+                            <span v-if="selectedCategory === cat.code" class="cat-d-underline" :style="{ background: getCatColor(cat, i) }"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Right arrow -->
+                <button v-if="canScrollRight" type="button" class="cat-d-arrow cat-d-arrow--right" aria-label="เลื่อนหมวดหมู่ไปทางขวา" @click="scrollDesktop(1)">
+                    <i class="pi pi-chevron-right"></i>
+                </button>
             </div>
         </div>
 
-        <div v-else class="cat-wrap">
-            <button v-if="canScrollLeft" type="button" class="cat-arrow cat-arrow--left" :aria-label="t('landing.scrollLeft')" @click="scrollTrack(-1)">
-                <i class="pi pi-chevron-left"></i>
-            </button>
-
-            <div ref="trackRef" class="cat-track" @scroll="updateScroll">
-                <button
-                    v-for="(cat, i) in categories"
-                    :key="cat.code"
-                    :ref="(el) => setItemRef(el, cat.code)"
-                    type="button"
-                    :class="['cat-item', selectedCategory === cat.code ? 'is-active' : '']"
-                    :aria-pressed="selectedCategory === cat.code"
-                    :aria-label="`${t('common.select')} ${getCategoryName(cat)}`"
-                    @click="selectCategory(cat.code)"
-                >
-                    <span class="cat-circle" :style="{ background: getCatBg(cat, i), color: getCatColor(cat, i) }">
-                        <img v-if="resolveCategoryImage(cat)" :src="resolveCategoryImage(cat)" :alt="getCategoryName(cat)" class="cat-img" loading="lazy" decoding="async" @error="handleImageError(cat)" />
-                        <span v-else-if="getCategoryInitial(cat)" class="cat-initial">{{ getCategoryInitial(cat) }}</span>
-                        <i v-else class="pi pi-tag"></i>
-                    </span>
-
-                    <span class="cat-label" :style="selectedCategory === cat.code ? { color: getCatColor(cat, i) } : {}">{{ getCategoryName(cat) }}</span>
-
-                    <span v-if="selectedCategory === cat.code" class="cat-underline" :style="{ background: getCatColor(cat, i) }"></span>
-                </button>
+        <!-- ══════════════════════════════════════════════════
+             MOBILE — horizontal scroll chips
+        ══════════════════════════════════════════════════════ -->
+        <div class="cat-mobile md:hidden">
+            <div v-if="loading" class="cat-m-track">
+                <Skeleton v-for="i in 8" :key="i" height="32px" :width="`${60 + (i % 3) * 20}px`" class="rounded-full shrink-0" />
             </div>
 
-            <button v-if="canScrollRight" type="button" class="cat-arrow cat-arrow--right" :aria-label="t('landing.scrollRight')" @click="scrollTrack(1)">
-                <i class="pi pi-chevron-right"></i>
-            </button>
+            <div v-else class="cat-m-wrap">
+                <button v-if="canMobileScrollLeft" type="button" class="cat-m-arrow cat-m-arrow--left" aria-label="เลื่อนหมวดหมู่ไปทางซ้าย" @click="scrollMobile(-1)">
+                    <i class="pi pi-chevron-left"></i>
+                </button>
+                <div v-if="canMobileScrollLeft" class="cat-m-fade cat-m-fade--left"></div>
+
+                <div ref="mobileTrackRef" class="cat-m-track" @scroll="updateMobileScroll">
+                    <button
+                        v-for="(cat, i) in categories"
+                        :key="cat.code"
+                        type="button"
+                        :ref="(el) => setMobileChipRef(el, cat.code)"
+                        :class="['cat-m-chip', selectedCategory === cat.code ? 'cat-m-chip--active' : '']"
+                        :aria-pressed="selectedCategory === cat.code"
+                        :aria-label="`${t('common.select')} ${getCategoryName(cat)}`"
+                        :style="selectedCategory === cat.code
+                            ? { borderColor: getCatColor(cat, i), color: getCatColor(cat, i), background: getCatBg(cat, i) }
+                            : { borderColor: '#e8d8b0', color: '#6b5533' }"
+                        @click="selectCategory(cat.code)"
+                    >
+                        <img
+                            v-if="resolveCategoryImage(cat)"
+                            :src="resolveCategoryImage(cat)"
+                            :alt="getCategoryName(cat)"
+                            class="cat-m-img"
+                            @error="(e) => e.target.style.display = 'none'"
+                        />
+                        {{ getCategoryName(cat) }}
+                    </button>
+                </div>
+
+                <div v-if="canMobileScrollRight" class="cat-m-fade cat-m-fade--right"></div>
+                <button v-if="canMobileScrollRight" type="button" class="cat-m-arrow cat-m-arrow--right" aria-label="เลื่อนหมวดหมู่ไปทางขวา" @click="scrollMobile(1)">
+                    <i class="pi pi-chevron-right"></i>
+                </button>
+            </div>
         </div>
     </div>
 </template>
 
 <style scoped>
+/* ── Root ── */
 .cat-root {
-    background: var(--shop-surface);
-    border: 1px solid var(--shop-border);
-    border-radius: var(--shop-radius-card);
-    box-shadow: var(--shop-shadow-1);
+    background: #ffffff;
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
     overflow: hidden;
 }
 
-.cat-wrap {
+/* ══════════════════════════════════════════════
+   DESKTOP
+══════════════════════════════════════════════ */
+.cat-desktop {
+    padding: 0;
+}
+
+.cat-d-wrap {
     position: relative;
 }
 
-/* เรียงหมวดหมู่ 2 แถว แล้วเลื่อนแนวนอนเป็นชุดคอลัมน์ */
-.cat-track {
-    display: grid;
-    grid-template-rows: repeat(2, auto);
-    grid-auto-flow: column;
-    grid-auto-columns: clamp(4.2rem, 17vw, 5.6rem);
-    gap: clamp(0.15rem, 1vw, 0.5rem);
+.cat-d-track {
     overflow-x: auto;
-    scroll-snap-type: x proximity;
     scrollbar-width: none;
     -ms-overflow-style: none;
-    padding: 0.75rem 0.5rem 0.5rem;
+    padding: 16px 8px 4px;
+}
+.cat-d-track::-webkit-scrollbar { display: none; }
+
+/* 2-row grid: เรียง column-first, สูง 2 แถวพอดี */
+.cat-d-inner {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(2, auto);
+    gap: 4px 0;
+    width: max-content;
 }
 
-.cat-track::-webkit-scrollbar {
-    display: none;
-}
-
-.cat-item {
-    position: relative;
-    scroll-snap-align: center;
-    width: 100%;
+.cat-d-item {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.3rem;
-    padding: 0.25rem 0.15rem 0.55rem;
-    border: 0;
+    gap: 6px;
+    padding: 8px 12px 10px;
+    width: 96px;
+    border: none;
     background: transparent;
     cursor: pointer;
+    outline: none;
+    user-select: none;
+    position: relative;
+    transition: background 0.15s;
+    border-radius: 4px;
 }
+.cat-d-item:hover { background: #fafafa; }
+.cat-d-item--active { background: #fafafa; }
 
-/* วงกลมยืดตามจอ — เดิม fix 64px ทำให้มือถือเล็กกินพื้นที่เกินไป */
-.cat-circle {
-    width: clamp(3.25rem, 12vw, 4.5rem);
-    height: clamp(3.25rem, 12vw, 4.5rem);
+.cat-d-circle {
+    position: relative;
+    width: 64px;
+    height: 64px;
     border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
-    transition: transform 0.14s ease;
+    transition: transform 0.15s;
 }
-
-.cat-item:hover .cat-circle {
+.cat-d-item:hover .cat-d-circle,
+.cat-d-item--active .cat-d-circle {
+    position: relative;
     transform: scale(1.06);
 }
 
-.cat-img {
+.cat-d-img {
+    position: absolute; inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
 }
 
-/* ตัวอักษรแรกของชื่อหมวด ใช้เมื่อไม่มีรูปหรือรูปโหลดไม่ขึ้น */
-.cat-initial {
-    font-size: clamp(1.1rem, 4.5vw, 1.5rem);
-    font-weight: 900;
-    line-height: 1;
-}
-
-.cat-circle .pi {
-    font-size: 1.1rem;
-    opacity: 0.75;
-}
-
-.cat-label {
-    width: 100%;
+.cat-d-label {
+    font-size: 0.85rem;
+    color: #333;
+    text-align: center;
+    line-height: 1.3;
+    max-width: 80px;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    color: var(--market-text);
-    font-size: clamp(0.66rem, 2.4vw, 0.76rem);
+    white-space: normal;
+    word-break: break-word;
     font-weight: 600;
-    line-height: 1.3;
-    text-align: center;
+    transition: color 0.15s;
+}
+.cat-d-item--active .cat-d-label {
+    font-weight: 600;
 }
 
-.cat-item.is-active .cat-label {
-    font-weight: 800;
-}
-
-.cat-underline {
+/* Active underline (Shopee style) */
+.cat-d-underline {
     position: absolute;
-    left: 50%;
-    bottom: 0.15rem;
-    transform: translateX(-50%);
-    width: 1.6rem;
+    bottom: 0;
+    left: 16px;
+    right: 16px;
     height: 2px;
     border-radius: 2px;
 }
 
-.cat-skeleton-circle {
-    width: clamp(3.25rem, 12vw, 4.5rem) !important;
-    height: clamp(3.25rem, 12vw, 4.5rem) !important;
-}
-
-.cat-arrow {
+/* Scroll arrows */
+.cat-d-arrow {
     position: absolute;
-    top: 45%;
+    top: 50%;
     transform: translateY(-50%);
     z-index: 10;
-    width: 1.9rem;
-    height: 1.9rem;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
-    background: var(--shop-surface);
-    border: 1px solid var(--shop-border);
-    color: var(--market-muted);
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    color: #555;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     font-size: 0.7rem;
-    box-shadow: var(--shop-shadow-2);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    transition: box-shadow 0.14s;
+}
+.cat-d-arrow:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+.cat-d-arrow--left  { left: 2px; }
+.cat-d-arrow--right { right: 2px; }
+
+/* Divider between 2 rows */
+.cat-d-inner::after {
+    content: '';
+    display: none;
 }
 
-.cat-arrow--left {
-    left: 0.25rem;
+/* ══════════════════════════════════════════════
+   MOBILE
+══════════════════════════════════════════════ */
+.cat-mobile { padding: 8px 0; }
+
+.cat-m-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
 }
 
-.cat-arrow--right {
-    right: 0.25rem;
+.cat-m-track {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    padding: 4px 12px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    flex: 1;
+    min-width: 0;
+}
+.cat-m-track::-webkit-scrollbar { display: none; }
+
+.cat-m-img {
+    width: 20px;
+    height: 20px;
+    object-fit: cover;
+    border-radius: 50%;
+    margin-right: 5px;
+    flex-shrink: 0;
 }
 
-/* บนอุปกรณ์สัมผัสไม่ต้องมีปุ่มลูกศร ผู้ใช้ปัดเอาได้และปุ่มบังหมวดที่อยู่ริม */
-@media (hover: none) {
-    .cat-arrow {
-        display: none;
-    }
+.cat-m-chip {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1.5px solid #e8d8b0;
+    background: #fff;
+    color: #6b5533;
+    flex-shrink: 0;
+    outline: none;
+    user-select: none;
+    transition: all 0.14s;
+}
+.cat-m-chip:hover { background: #fafafa; }
+.cat-m-chip--active { font-weight: 600; }
+
+/* Mobile arrows */
+.cat-m-arrow {
+    position: absolute;
+    z-index: 10;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    color: #555;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.6rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+.cat-m-arrow--left  { left: 2px; }
+.cat-m-arrow--right { right: 2px; }
+
+/* Fade edges */
+.cat-m-fade {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 36px;
+    pointer-events: none;
+    z-index: 5;
+}
+.cat-m-fade--left  { left: 0;  background: linear-gradient(to right, #fff 30%, transparent); }
+.cat-m-fade--right { right: 0; background: linear-gradient(to left,  #fff 30%, transparent); }
+
+/* Divider between 2 rows on desktop */
+.cat-d-row-divider {
+    grid-column: 1 / -1;
+    height: 1px;
+    background: #f5f5f5;
+    margin: 0 8px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .cat-item:hover .cat-circle {
-        transform: none;
-    }
+    .cat-d-item, .cat-m-chip { transition: none !important; }
 }
 </style>

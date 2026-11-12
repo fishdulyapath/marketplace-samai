@@ -92,13 +92,6 @@ const menuItems = computed(() =>
             permission: 'admin.salesSettings'
         },
         {
-            title: 'จัดการโปรโมชันของแถม',
-            description: 'ตั้งเงื่อนไข "ซื้อครบแถม" และรายการของแถมสำหรับหน้าร้าน',
-            icon: 'pi pi-gift',
-            to: '/admin/sale-premium',
-            permission: 'admin.salePremium'
-        },
-        {
             title: 'กำหนดสิทธิ์',
             description: 'กำหนดหน้าจอหลังบ้านที่พนักงานแต่ละคนเข้าใช้งานได้',
             icon: 'pi pi-shield',

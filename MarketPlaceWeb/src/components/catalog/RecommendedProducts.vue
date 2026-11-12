@@ -1,15 +1,12 @@
 <script setup>
-import ProductCard from '@/components/product/ProductCard.vue';
+import CatalogShelf from './CatalogShelf.vue';
 import ProductService from '@/services/ProductService';
 import RecommendService from '@/services/RecommendService';
 import { useLanguageStore } from '@/stores/languageStore';
-import { pickProductName } from '@/utils/languageDisplay';
 import ProductDetailDialog from '@/views/pages/ProductDetailDialog.vue';
 import ProductFullDetailDialog from '@/views/pages/ProductFullDetailDialog.vue';
 import ProductSetDialog from '@/views/pages/ProductSetDialog.vue';
 import Button from 'primevue/button';
-import ProgressSpinner from 'primevue/progressspinner';
-import Skeleton from 'primevue/skeleton';
 import { useToast } from 'primevue/usetoast';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
@@ -17,9 +14,6 @@ const toast = useToast();
 const languageStore = useLanguageStore();
 const t = languageStore.t;
 
-function getProductDisplayName(product) {
-    return pickProductName(product, languageStore.locale) || product.display_name || product.item_name || '';
-}
 
 // ข้อมูลสำหรับ ProductDetailDialog
 const selectedProductCode = ref('');
@@ -29,6 +23,7 @@ const showProductFullDetail = ref(false);
 
 // ข้อมูลสินค้าแนะนำ
 const recommendedProducts = ref([]);
+const emit = defineEmits(['ready']);
 const recommendedPage = ref(0);
 const recommendedPerPage = ref(10);
 const loadingRecommended = ref(true);
@@ -161,6 +156,7 @@ async function loadRecommendedProducts(page = 0, reset = false) {
         initialLoading.value = false;
     } finally {
         loadingRecommended.value = false;
+        if (reset) emit('ready');
     }
 }
 
@@ -208,9 +204,6 @@ function scrollRight() {
     }
 }
 
-function getInventoryStatus(soldOut) {
-    return soldOut === '1' ? 'OUTOFSTOCK' : 'INSTOCK';
-}
 
 // ดูรายละเอียดสินค้า (เปลี่ยนเป็นเปิด Dialog แทน)
 function viewProductDetail(product) {
@@ -253,7 +246,7 @@ function toggleFavorite(product, event) {
     const oldFavoriteStatus = product.favorite_item;
 
     // สลับค่า favorite_item ระหว่าง "0" และ "1"
-    product.favorite_item = product.favorite_item === '1' ? '0' : '1';
+    product.favorite_item = String(product.favorite_item) === '1' ? '0' : '1';
 
     // เรียกใช้งาน API เพื่ออัปเดตสถานะรายการโปรด
     ProductService.updateFavoriteStatus(product.item_code, product.favorite_item).catch((error) => {
@@ -280,95 +273,19 @@ function handleFavoriteChanged(data) {
 </script>
 
 <template>
-    <!-- RULE: hide-empty-section — render เฉพาะตอนโหลดครั้งแรก หรือมีข้อมูลจริง
-         ใช้ initialLoading ไม่ใช่ loadingRecommended เพราะตัวหลังเป็น true ทุกครั้งที่โหลดหน้าถัดไป
-         Toast ถูกลบออก (AppLayout มีตัวกลางอยู่แล้ว) เพื่อให้ root มี element เดียวที่ v-if คุมได้ -->
-    <div v-if="initialLoading || recommendedProducts.length" class="recommend-root">
-        <!-- ส่วนสินค้าแนะนำด้านบน -->
-        <section class="mb-1 relative recommend-shell">
-            <div class="flex justify-between items-center px-4 py-3 recommend-head">
-                <div>
-                    <h2 class="recommend-title m-0 flex items-center gap-2">
-                        <i class="pi pi-sparkles"></i>
-                        <span>{{ t('landing.recommendedTitle') }}</span>
-                    </h2>
-                    <p class="recommend-subtitle m-0">{{ t('landing.recommendSubtitle') }}</p>
-                </div>
+    <div v-if="initialLoading || recommendedProducts.length" class="shelf-container">
+        <Toast position="top-right" />
+        <CatalogShelf :products="recommendedProducts" :initial-loading="initialLoading" :loading-more="loadingRecommended"
+            @track="scrollContainer = $event" @scroll="handleScroll" @previous="scrollLeft" @next="scrollRight"
+            @pause="handleMouseEnter" @resume="handleMouseLeave" @open="viewProductDetail">
+            <template #action="{ product }">
+                <Button :icon="String(product.favorite_item) === '1' ? 'pi pi-heart-fill' : 'pi pi-heart'" text rounded
+                    :aria-pressed="String(product.favorite_item) === '1'"
+                    :aria-label="t(String(product.favorite_item) === '1' ? 'productDetail.removeFavorite' : 'productDetail.addFavorite')"
+                    class="favorite-action" @click="toggleFavorite(product, $event)" />
+            </template>
+        </CatalogShelf>
 
-                <!-- ปุ่มเลื่อนซ้าย-ขวา -->
-                <div class="flex gap-2">
-                    <Button icon="pi pi-chevron-left" rounded outlined size="small" class="recommend-nav-btn" :aria-label="t('landing.scrollLeft')" @click="scrollLeft" />
-                    <Button icon="pi pi-chevron-right" rounded outlined size="small" class="recommend-nav-btn" :aria-label="t('landing.scrollRight')" @click="scrollRight" />
-                </div>
-            </div>
-
-            <div class="relative">
-                <!-- คอนเทนเนอร์สำหรับการเลื่อน -->
-                <div ref="scrollContainer" class="overflow-x-auto py-3 hide-scrollbar" @scroll="handleScroll" @mouseenter="handleMouseEnter" @mouseleave="handleMouseLeave">
-                    <div class="flex gap-3 px-4" style="width: max-content; min-width: 100%">
-                        <!-- Skeleton Loading -->
-                        <template v-if="initialLoading">
-                            <div v-for="i in 5" :key="i" class="shop-card shop-card--rail recommend-card">
-                                <Skeleton height="136px" />
-                                <div class="p-2">
-                                    <Skeleton width="80%" height="12px" class="mb-1" />
-                                    <Skeleton width="100%" height="14px" class="mb-2" />
-                                    <div class="flex justify-between items-center mt-2">
-                                        <Skeleton width="50%" height="16px" />
-                                        <Skeleton shape="circle" size="24px" />
-                                    </div>
-                                </div>
-                            </div>
-                        </template>
-
-                        <!-- Actual Products -->
-                        <template v-else>
-                            <ProductCard
-                                v-for="product in recommendedProducts"
-                                :key="product.item_code"
-                                variant="rail"
-                                class="recommend-card hoverable"
-                                :name="getProductDisplayName(product)"
-                                :image="product.image"
-                                :fallback-image="product.imageFallback"
-                                :aria-label="`${t('productDetail.viewMoreDetails')} ${getProductDisplayName(product)}`"
-                                @select="viewProductDetail(product)"
-                            >
-                                <!-- ปุ่มหัวใจต้องอยู่ใน slot media เพราะเป็น interactive ที่ต้อง @click.stop เอง
-                                     การ์ดกลางไม่รู้จักตรรกะ favorite (ดูกฎในหัวไฟล์ ProductCard.vue) -->
-                                <template #media>
-                                    <div class="absolute right-1 top-1 cursor-pointer">
-                                        <Button
-                                            :icon="product.favorite_item === '1' ? 'pi pi-heart-fill' : 'pi pi-heart'"
-                                            text
-                                            rounded
-                                            :aria-label="product.favorite_item === '1' ? t('productDetail.removeFavorite') : t('productDetail.addFavorite')"
-                                            :aria-pressed="product.favorite_item === '1'"
-                                            @click.stop="toggleFavorite(product, $event)"
-                                            :class="product.favorite_item === '1' ? 'p-button-rounded p-button-text p-button-danger' : 'p-button-rounded p-button-text'"
-                                            style="width: 1.5rem; height: 1.5rem; font-size: 0.7rem"
-                                        />
-                                    </div>
-                                </template>
-
-                                <template #eyebrow>
-                                    <div class="recommend-category">
-                                        {{ product.category_display || product.category }}
-                                    </div>
-                                </template>
-                            </ProductCard>
-
-                            <!-- ตัวแสดงสถานะการโหลด -->
-                            <div v-if="loadingRecommended && recommendedProducts.length > 0" class="flex items-center justify-center min-w-[60px]">
-                                <ProgressSpinner style="width: 30px" />
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ProductDetailDialog -->
         <ProductDetailDialog
             :visible="showProductDetail"
             :item-code="selectedProductCode"
@@ -398,180 +315,8 @@ function handleFavoriteChanged(data) {
 </template>
 
 <style scoped>
-.recommend-shell {
-    border-radius: 10px;
-    border: 1px solid var(--market-card-border, #e8dcc4);
-    background: var(--market-card-bg, #fff);
-    box-shadow: var(--shop-shadow-1);
-    animation: recommendFadeIn 280ms ease;
-    overflow: hidden;
-}
-
-.recommend-head {
-    padding: 0.8rem 0.9rem;
-    border-bottom: 1px solid var(--market-card-border, #efe3c8);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--market-card-bg, #fff) 96%, var(--market-primary, #0f9f6e)) 0%, var(--market-card-bg, #fff) 100%);
-}
-
-.recommend-title {
-    font-size: 1rem;
-    font-weight: 800;
-    color: var(--market-text, #2f2412);
-}
-
-.recommend-title i {
-    width: 1.7rem;
-    height: 1.7rem;
-    border-radius: 8px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--market-primary, #0f9f6e);
-    background: var(--market-primary-soft, #ecfdf5);
-    font-size: 0.86rem;
-}
-
-.recommend-subtitle {
-    margin-top: 0.15rem;
-    font-size: 0.74rem;
-    color: var(--market-muted, #8a6f37);
-}
-
-.recommend-card {
-    border: 1px solid var(--market-card-border, #efe1c4);
-    border-radius: 7px;
-    overflow: hidden;
-    background: var(--market-card-bg, #fff);
-    box-shadow: var(--shop-shadow-1);
-}
-
-.recommend-card.hoverable {
-    transition:
-        transform 0.2s ease,
-        box-shadow 0.2s ease;
-}
-
-.recommend-card.hoverable:hover {
-    transform: translateY(-2px);
-    border-color: color-mix(in srgb, var(--market-primary, #0f9f6e) 30%, var(--market-card-border, #efe3c8));
-    box-shadow: var(--shop-shadow-3);
-}
-
-/* กรอบรูป (aspect-ratio กัน CLS) และชื่อสินค้า มาจาก ProductCard + shop-card.scss แล้ว */
-
-/* ชื่อสินค้าบนแถวแนะนำหนากว่าการ์ดในกริดเล็กน้อย ให้อ่านง่ายในกล่องแคบ */
-.recommend-card :deep(.shop-card-name) {
-    font-size: 0.82rem;
-    font-weight: 700;
-    line-height: 1.38;
-}
-
-.recommend-category {
-    font-size: 0.7rem;
-    color: var(--market-muted, #8a6f37);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-bottom: 0.2rem;
-}
-
-:deep(.recommend-nav-btn.p-button) {
-    width: 1.9rem;
-    height: 1.9rem;
-}
-
-@keyframes recommendFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(5px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@media (max-width: 1024px) {
-    .recommend-head {
-        padding: 0.85rem;
-    }
-}
-
-@media (max-width: 640px) {
-    .recommend-shell {
-        border-radius: 0.75rem;
-    }
-
-    .recommend-head {
-        padding: 0.75rem;
-    }
-
-    .recommend-title {
-        font-size: 0.95rem;
-    }
-
-    .recommend-subtitle {
-        font-size: 0.75rem;
-    }
-
-    :deep(.recommend-nav-btn.p-button) {
-        width: 1.7rem;
-        height: 1.7rem;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .recommend-shell,
-    .recommend-card,
-    .recommend-card.hoverable {
-        animation: none !important;
-        transition: none !important;
-        transform: none !important;
-    }
-}
-
-/* ซ่อน scrollbar แต่ยังใช้ scroll ได้ */
-.hide-scrollbar {
-    scrollbar-width: none; /* Firefox */
-    -ms-overflow-style: none; /* IE and Edge */
-    scroll-behavior: smooth; /* ให้การเลื่อนสมูทขึ้น */
-}
-
-.hide-scrollbar::-webkit-scrollbar {
-    display: none; /* Chrome, Safari, Opera */
-}
-
-/* อนิเมชันสำหรับโหลดเพิ่มเติม */
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-.fade-in {
-    animation: fadeIn 0.3s ease-in-out;
-}
-
-/* สไตล์สำหรับปุ่มรายการโปรดขนาดเล็ก */
-:deep(.p-button.p-button-text.p-button-rounded) {
-    width: 1.5rem !important;
-    height: 1.5rem !important;
-    padding: 0 !important;
-    background-color: rgba(255, 255, 255, 0.8);
-}
-
-:deep(.p-button.p-button-text.p-button-rounded.p-button-danger) {
-    background-color: rgba(220, 53, 69, 0.9);
-}
-
-:deep(.p-button.p-button-text.p-button-rounded .p-button-icon) {
-    font-size: 0.7rem;
-}
-
-:deep(.p-button.p-button-text.p-button-rounded.p-button-danger .p-button-icon) {
-    color: white;
-}
+.shelf-container { min-width: 0; }
+.favorite-action { position: absolute; top: .25rem; right: .25rem; width: 2rem; height: 2rem; background: var(--market-card-bg, white); }
+.favorite-action[aria-pressed="true"] { color: #bd3151; }
+@media (max-width: 900px) { .favorite-action { border-radius: 50%; background: #fff; width: 2rem; height: 2rem; } }
 </style>
